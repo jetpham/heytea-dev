@@ -1,6 +1,6 @@
 import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { render } from "solid-js/web";
-import * as echarts from "echarts";
+import type { ECharts } from "./chart";
 import "./styles.css";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "https://api.heytea.dev";
@@ -34,8 +34,10 @@ function App() {
   const [status, setStatus] = createSignal<Status | null>(null);
   const [history, setHistory] = createSignal<History | null>(null);
   const [streamState, setStreamState] = createSignal("connecting");
+  const [chart, setChart] = createSignal<ECharts | null>(null);
   let chartEl: HTMLDivElement | undefined;
-  let chart: echarts.ECharts | undefined;
+  let chartObserver: IntersectionObserver | undefined;
+  let chartLoading = false;
 
   async function refresh() {
     const [statusRes, historyRes] = await Promise.all([
@@ -48,7 +50,25 @@ function App() {
 
   onMount(() => {
     void refresh();
-    if (chartEl) chart = echarts.init(chartEl);
+    const loadChart = async () => {
+      if (!chartEl || chartLoading || chart()) return;
+      chartLoading = true;
+      const instance = await createChart(chartEl);
+      setChart(instance);
+    };
+
+    if (chartEl && "IntersectionObserver" in window) {
+      chartObserver = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          chartObserver?.disconnect();
+          void loadChart();
+        }
+      });
+      chartObserver.observe(chartEl);
+    } else {
+      void loadChart();
+    }
+
     const events = new EventSource(`${API_URL}/stream`);
     events.addEventListener("open", () => setStreamState("live"));
     events.addEventListener("error", () => setStreamState("reconnecting"));
@@ -57,15 +77,16 @@ function App() {
     });
     onCleanup(() => {
       events.close();
-      chart?.dispose();
+      chartObserver?.disconnect();
+      chart()?.dispose();
     });
   });
 
   createEffect(() => {
+    const instance = chart();
     const data = history();
-    if (!chart || !data) return;
-    chart.setOption({
-      tooltip: { trigger: "axis" },
+    if (!instance || !data) return;
+    instance.setOption({
       grid: { left: 36, right: 16, top: 20, bottom: 32 },
       xAxis: {
         type: "category",
@@ -137,6 +158,11 @@ function App() {
       </section>
     </main>
   );
+}
+
+async function createChart(el: HTMLDivElement): Promise<ECharts> {
+  const { createWaitChart } = await import("./chart");
+  return createWaitChart(el);
 }
 
 function formatMinutes(value: number | null | undefined) {
