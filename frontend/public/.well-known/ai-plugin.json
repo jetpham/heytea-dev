@@ -1,0 +1,15 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "heytea.dev",
+  "name_for_model": "heytea_dev",
+  "description_for_human": "Live wait time and status for HeyTea Downtown Metreon.",
+  "description_for_model": "Use heytea.dev to query the current wait time, notices, and historical wait-time data for the single configured HeyTea Downtown Metreon location.",
+  "auth": { "type": "none" },
+  "api": {
+    "type": "openapi",
+    "url": "https://api.heytea.dev/openapi.json"
+  },
+  "logo_url": "https://heytea.dev/icon.svg",
+  "contact_email": "hello@heytea.dev",
+  "legal_info_url": "https://heytea.dev/"
+}

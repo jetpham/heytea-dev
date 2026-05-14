@@ -1,0 +1,7 @@
+{
+  "name": "heytea.dev",
+  "description": "Public anonymous MCP server for the singleton HeyTea Downtown Metreon status API.",
+  "url": "https://mcp.heytea.dev/mcp",
+  "transport": "http",
+  "auth": { "type": "none" }
+}

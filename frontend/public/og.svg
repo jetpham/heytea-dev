@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#0b100d"/>
+  <circle cx="940" cy="120" r="280" fill="#7ddf64" opacity="0.14"/>
+  <text x="72" y="160" fill="#7ddf64" font-family="Inter, Arial, sans-serif" font-size="34" letter-spacing="8">HEYTEA.DEV</text>
+  <text x="72" y="315" fill="#eef7e7" font-family="Inter, Arial, sans-serif" font-size="96" font-weight="700">Downtown Metreon</text>
+  <text x="72" y="430" fill="#eef7e7" font-family="Inter, Arial, sans-serif" font-size="96" font-weight="700">wait time</text>
+  <text x="76" y="520" fill="#9ba995" font-family="Inter, Arial, sans-serif" font-size="38">Live status for 165 4th St, San Francisco</text>
+</svg>

@@ -1,0 +1,14 @@
+/target
+/.direnv
+/.env
+/.env.*
+!/frontend/.env.example
+/frontend/node_modules
+/node_modules
+/frontend/dist
+/result
+/.terraform
+*.tfstate
+*.tfstate.*
+*.plan
+.DS_Store

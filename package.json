@@ -1,0 +1,12 @@
+{
+  "name": "heytea-dev",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "build": "pnpm --filter frontend build",
+    "dev": "pnpm --filter frontend dev",
+    "lint": "pnpm --filter frontend lint",
+    "typecheck": "pnpm --filter frontend typecheck"
+  }
+}

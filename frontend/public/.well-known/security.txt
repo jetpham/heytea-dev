@@ -1,0 +1,3 @@
+Contact: mailto:security@heytea.dev
+Preferred-Languages: en
+Canonical: https://heytea.dev/.well-known/security.txt

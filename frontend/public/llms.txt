@@ -1,0 +1,23 @@
+# heytea.dev
+
+heytea.dev is a singleton status dashboard and public API for the HeyTea Downtown Metreon location at 165 4th St, San Francisco.
+
+## Public API
+
+Base URL: https://api.heytea.dev
+
+- GET /status: current store state, wait time, queue counts, notices, and freshness.
+- GET /wait-time: current wait-time fields only.
+- GET /notice: current store notice.
+- GET /closing-notice: current closing notice, if any.
+- GET /history?range=24h&bucket=5m: bucketed historical wait-time data.
+- GET /stream: server-sent events for live updates.
+- GET /openapi.json: OpenAPI schema.
+
+There are no store IDs, no location endpoints, no menu endpoints, and no /v1 prefix. The service is only for the configured Downtown Metreon location.
+
+## Docs
+
+- Human/API docs: https://docs.heytea.dev
+- MCP server: https://mcp.heytea.dev
+- Status page: https://status.heytea.dev

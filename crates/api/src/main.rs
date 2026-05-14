@@ -1,0 +1,48 @@
+mod db;
+mod error;
+mod openapi;
+mod routes;
+
+use axum::Router;
+use sqlx::postgres::PgPoolOptions;
+use std::{env, net::SocketAddr, time::Duration};
+use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: sqlx::PgPool,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with(tracing_subscriber::fmt::layer().json())
+        .init();
+
+    let database_url = env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://heytea:heytea@localhost:5432/heytea".to_string());
+    let bind = env::var("HEYTEA_API_BIND").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+    let addr: SocketAddr = bind.parse()?;
+
+    let pool = PgPoolOptions::new()
+        .max_connections(10)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(&database_url)
+        .await?;
+
+    let app = app(AppState { pool });
+    tracing::info!(%addr, "starting heytea api");
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+pub fn app(state: AppState) -> Router {
+    routes::router(state)
+        .layer(CompressionLayer::new())
+        .layer(CorsLayer::permissive())
+        .layer(TraceLayer::new_for_http())
+}
