@@ -9,7 +9,7 @@ resource "digitalocean_droplet" "heytea" {
   image    = var.droplet_image
   ssh_keys = [var.ssh_key_fingerprint]
 
-  tags = ["heytea", "nixos", "production"]
+  tags = ["heytea", "nixos", "production", "custom-image"]
 }
 
 resource "digitalocean_firewall" "heytea" {
@@ -29,7 +29,17 @@ resource "digitalocean_firewall" "heytea" {
     source_addresses = ["0.0.0.0/0", "::/0"]
   }
 
-  # SSH is intended to be Tailscale-only after bootstrap. Do not open 22 here.
+  dynamic "inbound_rule" {
+    for_each = length(var.bootstrap_ssh_source_addresses) > 0 ? [1] : []
+    content {
+      protocol         = "tcp"
+      port_range       = "22"
+      source_addresses = var.bootstrap_ssh_source_addresses
+    }
+  }
+
+  # SSH is intended to be Tailscale-only after bootstrap. Only set
+  # bootstrap_ssh_source_addresses during the initial Tailscale join.
 
   outbound_rule {
     protocol              = "tcp"

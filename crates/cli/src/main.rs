@@ -18,8 +18,6 @@ enum Command {
     History {
         #[arg(long, default_value = "24h")]
         range: String,
-        #[arg(long)]
-        bucket: Option<String>,
     },
 }
 
@@ -33,9 +31,7 @@ async fn main() -> anyhow::Result<()> {
         Command::WaitTime => serde_json::to_value(client.wait_time().await?)?,
         Command::Notice => serde_json::to_value(client.notice().await?)?,
         Command::ClosingNotice => serde_json::to_value(client.closing_notice().await?)?,
-        Command::History { range, bucket } => {
-            serde_json::to_value(client.history(&range, bucket.as_deref()).await?)?
-        }
+        Command::History { range } => serde_json::to_value(client.history(&range).await?)?,
     };
 
     println!("{}", serde_json::to_string_pretty(&value)?);

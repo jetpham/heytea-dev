@@ -1,20 +1,23 @@
 # SEO And Discovery Files
 
-The frontend publishes:
+The site service publishes the dashboard and discovery routes directly:
 
 - `robots.txt`
 - `sitemap.xml`
 - `llms.txt`
+- `llms-full.txt`
+- `agents.txt`
+- `skill.md`
 - `site.webmanifest`
 - `.well-known/security.txt`
 - `.well-known/ai-plugin.json`
 - `.well-known/mcp.json`
-- OpenGraph and Twitter card meta tags
-- JSON-LD WebSite metadata
-
-The public API publishes:
-
+- `.well-known/agent.json`
+- `.well-known/webmcp.json`
+- OpenGraph meta tags
+- JSON-LD structured data
+- root content negotiation for JSON, markdown, and plain text
 - `GET /openapi.json`
-- `GET /docs` via Scalar-compatible OpenAPI rendering
+- `GET /docs` via a Vite-built Swagger UI bundle
 
-The docs domain should serve the same OpenAPI schema and written API docs.
+The docs domain routes `/` to `/docs` and proxies `/openapi.json` to the API service.

@@ -18,9 +18,9 @@ jobs:
         run: nix flake check --no-build
       - name: Rust check
         run: nix develop -c cargo check --workspace
-      - name: Frontend install
-        run: nix develop -c pnpm install --frozen-lockfile
-      - name: Frontend build
-        run: nix develop -c pnpm build
+      - name: Site build
+        run: nix develop -c pnpm install --frozen-lockfile && nix develop -c pnpm build
+      - name: Build packages
+        run: nix build .#heytea-api .#heytea-poller .#heytea-mcp .#heytea-cli .#heytea-assets .#heytea-site-assets .#heytea-site .#heytea-migrations --no-link
       - name: OpenTofu validate
         run: nix develop -c sh -c 'cd infra/opentofu && tofu init -backend=false && tofu validate'

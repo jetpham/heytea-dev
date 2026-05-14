@@ -4,15 +4,18 @@ Live wait-time and status dashboard for the HeyTea Downtown Metreon location.
 
 This project intentionally models a single configured store. The public API never accepts or returns an upstream shop ID; the configured upstream ID lives in `config/shop-id` and is only used by the poller.
 
+Live values are considered fresh until the next expected poll: `ttl_seconds = max(0, observed_at + poll_interval - now)`. Poller commits normalized data to Postgres, sends a Postgres notification, and the API broadcasts `status.updated` to connected SSE clients.
+
 ## Stack
 
-- Rust API with Axum, sqlx, utoipa, and Scalar docs
+- Rust API with Axum, sqlx, and utoipa OpenAPI
 - Rust poller service for HeyTea public app endpoints
 - Public anonymous HTTP MCP server
 - Rust SDK crate and CLI binary named `heytea`
-- SolidJS + Vite + pnpm frontend
+- Rust/Axum + Askama server-rendered dashboard, docs, and status pages
+- Vite-built browser assets for tiny SSE updates and Swagger UI docs
 - Postgres + TimescaleDB for canonical state and history
-- Redis for rate limits, SSE fanout, and hot cache
+- Postgres notifications for live SSE fanout; no Redis cache
 - NixOS, Caddy, deploy-rs, agenix
 - OpenTofu for DigitalOcean and Cloudflare
 - Umami analytics, Prometheus, Loki, Grafana, OpenTelemetry, blackbox_exporter
@@ -26,7 +29,7 @@ Base URL: `https://api.heytea.dev`
 - `GET /wait-time`
 - `GET /notice`
 - `GET /closing-notice`
-- `GET /history?range=24h&bucket=5m`
+- `GET /history?range=today`
 - `GET /stream`
 - `GET /healthz`
 - `GET /readyz`
@@ -40,8 +43,18 @@ No `/v1`, no store-listing endpoints, no location endpoints, and no menu endpoin
 ```sh
 nix develop
 cargo check
-pnpm install
 pnpm build
+nix build .#heytea-api .#heytea-poller .#heytea-mcp .#heytea-cli .#heytea-assets .#heytea-site-assets .#heytea-site .#heytea-migrations --no-link
 ```
+
+## DigitalOcean NixOS Image
+
+Build the production NixOS custom image with:
+
+```sh
+nix build .#nixos-do-image
+```
+
+Upload it as a DigitalOcean custom image and pass the resulting image ID to OpenTofu as `droplet_image`. See `docs/deploy-nixos-digitalocean.md`.
 
 Do not run OpenTofu `apply` or deploy commands unless you intend to provision infrastructure.

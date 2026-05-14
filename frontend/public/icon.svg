@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="heytea.dev">
-  <rect width="128" height="128" rx="28" fill="#0b100d"/>
-  <circle cx="64" cy="64" r="42" fill="#7ddf64" opacity="0.18"/>
-  <path d="M35 47h58l-8 48H43L35 47Z" fill="#eef7e7"/>
-  <path d="M45 34h38" stroke="#7ddf64" stroke-width="10" stroke-linecap="round"/>
-  <path d="M50 60h28" stroke="#0b100d" stroke-width="7" stroke-linecap="round"/>
-</svg>

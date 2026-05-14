@@ -1,8 +1,8 @@
 use crate::error::ApiError;
 use chrono::{DateTime, TimeDelta, Utc};
 use heytea_core::{
-    ClosingNoticeResponse, HistoryBucket, HistoryPoint, HistoryRange, HistoryResponse,
-    NoticeResponse, StatusResponse, WaitTimeResponse, DEFAULT_STALE_AFTER_SECONDS,
+    ClosingNoticeResponse, HistoryPoint, HistoryRange, HistoryResponse, NoticeResponse,
+    StatusResponse, WaitTimeResponse, DEFAULT_STALE_AFTER_SECONDS,
 };
 use sqlx::FromRow;
 
@@ -21,8 +21,12 @@ struct CurrentStatusRow {
     observed_at: DateTime<Utc>,
 }
 
-fn stale_after(observed_at: DateTime<Utc>) -> DateTime<Utc> {
+pub fn stale_after(observed_at: DateTime<Utc>) -> DateTime<Utc> {
     observed_at + TimeDelta::seconds(DEFAULT_STALE_AFTER_SECONDS)
+}
+
+pub fn ttl_seconds(stale_after: DateTime<Utc>) -> i64 {
+    (stale_after - Utc::now()).num_seconds().max(0)
 }
 
 fn is_stale(observed_at: DateTime<Utc>) -> bool {
@@ -106,6 +110,21 @@ pub async fn closing_notice(pool: &sqlx::PgPool) -> Result<ClosingNoticeResponse
     })
 }
 
+pub async fn schema_ready(pool: &sqlx::PgPool) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        r#"
+        select
+          to_regclass('public.current_status') is not null
+          and to_regclass('public.wait_time_observations') is not null
+          and to_regclass('public.store_metadata') is not null
+          and exists (select 1 from pg_extension where extname = 'timescaledb')
+        "#,
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false)
+}
+
 #[derive(Debug, FromRow)]
 struct HistoryPointRow {
     start: DateTime<Utc>,
@@ -121,48 +140,75 @@ struct HistoryPointRow {
 pub async fn history(
     pool: &sqlx::PgPool,
     range: HistoryRange,
-    bucket: HistoryBucket,
 ) -> Result<HistoryResponse, ApiError> {
-    let sql = format!(
-        r#"
-        select
-          time_bucket('{}'::interval, observed_at) as start,
-          avg(pickup_wait_minutes)::float8 as avg_pickup_wait_minutes,
-          min(pickup_wait_minutes) as min_pickup_wait_minutes,
-          max(pickup_wait_minutes) as max_pickup_wait_minutes,
-          avg(delivery_estimate_minutes)::float8 as avg_delivery_estimate_minutes,
-          avg(making_cups)::float8 as avg_making_cups,
-          avg(making_orders)::float8 as avg_making_orders,
-          count(*)::int8 as sample_count
-        from wait_time_observations
-        where observed_at >= now() - '{}'::interval
-        group by 1
-        order by 1 asc
-        "#,
-        bucket.sql_interval(),
-        range.sql_interval()
-    );
+    let sql = match range {
+        HistoryRange::Today => r#"
+            with current as (
+              select is_open from current_status where singleton = true limit 1
+            ), day_start as (
+              select date_trunc('day', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles' as start_at
+            ), last_closed as (
+              select max(observed_at) as observed_at
+              from wait_time_observations, day_start
+              where observed_at >= day_start.start_at
+                and is_open is distinct from true
+            ), open_start as (
+              select min(observed_at) as start_at
+              from wait_time_observations, day_start, last_closed
+              where observed_at >= day_start.start_at
+                and is_open is true
+                and (last_closed.observed_at is null or observed_at > last_closed.observed_at)
+            )
+            select
+              time_bucket('1 minute'::interval, observed_at) as start,
+              avg(pickup_wait_minutes)::float8 as avg_pickup_wait_minutes,
+              min(pickup_wait_minutes) as min_pickup_wait_minutes,
+              max(pickup_wait_minutes) as max_pickup_wait_minutes,
+              avg(delivery_estimate_minutes)::float8 as avg_delivery_estimate_minutes,
+              avg(making_cups)::float8 as avg_making_cups,
+              avg(making_orders)::float8 as avg_making_orders,
+              count(*)::int8 as sample_count
+            from wait_time_observations, open_start, current
+            where current.is_open is true
+              and open_start.start_at is not null
+              and observed_at >= open_start.start_at
+              and is_open is true
+            group by 1
+            order by 1 asc
+            "#
+        .to_string(),
+        _ => format!(
+            r#"
+            select
+              time_bucket('1 minute'::interval, observed_at) as start,
+              avg(pickup_wait_minutes)::float8 as avg_pickup_wait_minutes,
+              min(pickup_wait_minutes) as min_pickup_wait_minutes,
+              max(pickup_wait_minutes) as max_pickup_wait_minutes,
+              avg(delivery_estimate_minutes)::float8 as avg_delivery_estimate_minutes,
+              avg(making_cups)::float8 as avg_making_cups,
+              avg(making_orders)::float8 as avg_making_orders,
+              count(*)::int8 as sample_count
+            from wait_time_observations
+            where observed_at >= now() - '{}'::interval
+            group by 1
+            order by 1 asc
+            "#,
+            range.sql_interval()
+        ),
+    };
 
     let rows = sqlx::query_as::<_, HistoryPointRow>(&sql)
         .fetch_all(pool)
         .await?;
-    let bucket_delta = match bucket {
-        HistoryBucket::OneMinute => TimeDelta::minutes(1),
-        HistoryBucket::FiveMinutes => TimeDelta::minutes(5),
-        HistoryBucket::FifteenMinutes => TimeDelta::minutes(15),
-        HistoryBucket::OneHour => TimeDelta::hours(1),
-        HistoryBucket::OneDay => TimeDelta::days(1),
-    };
 
     Ok(HistoryResponse {
         range: range.to_string(),
-        bucket: bucket.to_string(),
         generated_at: Utc::now(),
         points: rows
             .into_iter()
             .map(|row| HistoryPoint {
                 start: row.start,
-                end: row.start + bucket_delta,
+                end: row.start + TimeDelta::minutes(1),
                 avg_pickup_wait_minutes: row.avg_pickup_wait_minutes,
                 min_pickup_wait_minutes: row.min_pickup_wait_minutes,
                 max_pickup_wait_minutes: row.max_pickup_wait_minutes,

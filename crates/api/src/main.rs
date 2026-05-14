@@ -1,17 +1,21 @@
 mod db;
 mod error;
+mod live;
 mod openapi;
 mod routes;
 
 use axum::Router;
+use heytea_core::StatusResponse;
 use sqlx::postgres::PgPoolOptions;
 use std::{env, net::SocketAddr, time::Duration};
+use tokio::sync::broadcast;
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: sqlx::PgPool,
+    pub status_events: broadcast::Sender<StatusResponse>,
 }
 
 #[tokio::main]
@@ -32,7 +36,13 @@ async fn main() -> anyhow::Result<()> {
         .connect(&database_url)
         .await?;
 
-    let app = app(AppState { pool });
+    let (status_events, _) = broadcast::channel(128);
+    live::spawn_status_listener(database_url, pool.clone(), status_events.clone());
+
+    let app = app(AppState {
+        pool,
+        status_events,
+    });
     tracing::info!(%addr, "starting heytea api");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

@@ -7,6 +7,7 @@ members = [
   "crates/mcp",
   "crates/poller",
   "crates/sdk",
+  "crates/site",
 ]
 
 [workspace.package]
@@ -17,9 +18,11 @@ authors = ["Jet Pham"]
 
 [workspace.dependencies]
 anyhow = "1"
+askama = "0.12"
 async-stream = "0.3"
 axum = { version = "0.7", features = ["macros"] }
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -27,7 +30,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "chrono", "json", "uuid", "migrate", "macros"] }
 thiserror = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["time"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "compression-full", "fs"] }
 tracing = "0.1"

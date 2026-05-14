@@ -42,18 +42,11 @@ impl Client {
         self.get("closing-notice").await
     }
 
-    pub async fn history(
-        &self,
-        range: &str,
-        bucket: Option<&str>,
-    ) -> anyhow::Result<HistoryResponse> {
+    pub async fn history(&self, range: &str) -> anyhow::Result<HistoryResponse> {
         let mut url = self.base_url.join("history")?;
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("range", range);
-            if let Some(bucket) = bucket {
-                query.append_pair("bucket", bucket);
-            }
         }
         self.http
             .get(url)

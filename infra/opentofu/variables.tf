@@ -12,8 +12,7 @@ variable "droplet_size" {
 
 variable "droplet_image" {
   type        = string
-  description = "NixOS image slug or custom image ID. Set during bootstrap."
-  default     = "ubuntu-24-04-x64"
+  description = "DigitalOcean custom image ID for the NixOS image built with `nix build .#nixos-do-image`."
 }
 
 variable "ssh_key_fingerprint" {
@@ -21,9 +20,15 @@ variable "ssh_key_fingerprint" {
   description = "DigitalOcean SSH key fingerprint used for bootstrap."
 }
 
+variable "bootstrap_ssh_source_addresses" {
+  type        = list(string)
+  description = "Temporary CIDRs allowed to SSH during first boot before Tailscale is joined. Leave empty after bootstrap."
+  default     = []
+}
+
 variable "cloudflare_zone_name" {
-  type        = string
-  default     = "heytea.dev"
+  type    = string
+  default = "heytea.dev"
 }
 
 variable "cloudflare_account_id" {
@@ -32,6 +37,6 @@ variable "cloudflare_account_id" {
 }
 
 variable "b2_bucket_name" {
-  type        = string
-  default     = "heytea-dev-backups"
+  type    = string
+  default = "heytea-dev-backups"
 }

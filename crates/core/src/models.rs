@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use utoipa::{IntoParams, ToSchema};
 
-pub const DEFAULT_STALE_AFTER_SECONDS: i64 = 90;
+pub const DEFAULT_POLL_INTERVAL_SECONDS: i64 = 60;
+pub const DEFAULT_STALE_AFTER_SECONDS: i64 = DEFAULT_POLL_INTERVAL_SECONDS;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -70,17 +71,14 @@ pub struct ReadyResponse {
 #[derive(Debug, Clone, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct HistoryQuery {
-    /// Lookback range. Supported values: 1h, 6h, 24h, 7d, 30d, 1y.
+    /// Lookback range. Supported values: today, 1h, 6h, 24h, 7d, 30d, 1y.
     pub range: Option<String>,
-    /// Chart resolution. Supported values: 1m, 5m, 15m, 1h, 1d.
-    pub bucket: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryResponse {
     pub range: String,
-    pub bucket: String,
     pub generated_at: DateTime<Utc>,
     pub points: Vec<HistoryPoint>,
 }
@@ -101,6 +99,7 @@ pub struct HistoryPoint {
 
 #[derive(Debug, Clone, Copy)]
 pub enum HistoryRange {
+    Today,
     OneHour,
     SixHours,
     OneDay,
@@ -112,6 +111,7 @@ pub enum HistoryRange {
 impl HistoryRange {
     pub fn sql_interval(self) -> &'static str {
         match self {
+            Self::Today => "today",
             Self::OneHour => "1 hour",
             Self::SixHours => "6 hours",
             Self::OneDay => "24 hours",
@@ -125,6 +125,7 @@ impl HistoryRange {
 impl fmt::Display for HistoryRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::Today => "today",
             Self::OneHour => "1h",
             Self::SixHours => "6h",
             Self::OneDay => "24h",
@@ -140,6 +141,7 @@ impl FromStr for HistoryRange {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "today" => Ok(Self::Today),
             "1h" => Ok(Self::OneHour),
             "6h" => Ok(Self::SixHours),
             "24h" => Ok(Self::OneDay),
@@ -147,54 +149,6 @@ impl FromStr for HistoryRange {
             "30d" => Ok(Self::ThirtyDays),
             "1y" => Ok(Self::OneYear),
             _ => Err("unsupported range"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum HistoryBucket {
-    OneMinute,
-    FiveMinutes,
-    FifteenMinutes,
-    OneHour,
-    OneDay,
-}
-
-impl HistoryBucket {
-    pub fn sql_interval(self) -> &'static str {
-        match self {
-            Self::OneMinute => "1 minute",
-            Self::FiveMinutes => "5 minutes",
-            Self::FifteenMinutes => "15 minutes",
-            Self::OneHour => "1 hour",
-            Self::OneDay => "1 day",
-        }
-    }
-}
-
-impl fmt::Display for HistoryBucket {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::OneMinute => "1m",
-            Self::FiveMinutes => "5m",
-            Self::FifteenMinutes => "15m",
-            Self::OneHour => "1h",
-            Self::OneDay => "1d",
-        })
-    }
-}
-
-impl FromStr for HistoryBucket {
-    type Err = &'static str;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "1m" => Ok(Self::OneMinute),
-            "5m" => Ok(Self::FiveMinutes),
-            "15m" => Ok(Self::FifteenMinutes),
-            "1h" => Ok(Self::OneHour),
-            "1d" => Ok(Self::OneDay),
-            _ => Err("unsupported bucket"),
         }
     }
 }

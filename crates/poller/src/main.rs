@@ -2,8 +2,10 @@ mod persistence;
 mod upstream;
 
 use anyhow::Context;
+use chrono::{DateTime, Utc};
 use heytea_core::read_shop_id;
 use persistence::PersistedPoll;
+use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 use std::{env, time::Duration};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -51,6 +53,7 @@ async fn poll_once(pool: &sqlx::PgPool, client: &HeyTeaClient, shop_id: i64) -> 
     let wait_time = client.fetch_wait_time(shop_id).await;
     let notice = client.fetch_notice(shop_id).await;
     let closing_notice = client.fetch_closing_notice(shop_id).await;
+    let notify_observed_at = wait_time.value.as_ref().map(|wait| wait.observed_at);
 
     let poll = PersistedPoll {
         started,
@@ -60,5 +63,22 @@ async fn poll_once(pool: &sqlx::PgPool, client: &HeyTeaClient, shop_id: i64) -> 
         closing_notice,
     };
     persistence::persist_poll(pool, poll).await?;
+    if let Some(observed_at) = notify_observed_at {
+        if let Err(error) = publish_status_updated(pool, observed_at).await {
+            tracing::warn!(?error, "status notification publish failed");
+        }
+    }
+    Ok(())
+}
+
+async fn publish_status_updated(
+    pool: &sqlx::PgPool,
+    observed_at: DateTime<Utc>,
+) -> anyhow::Result<()> {
+    let payload = json!({ "observedAt": observed_at }).to_string();
+    sqlx::query("select pg_notify('heytea_status_updated', $1)")
+        .bind(payload)
+        .execute(pool)
+        .await?;
     Ok(())
 }

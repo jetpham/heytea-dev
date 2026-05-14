@@ -18,9 +18,8 @@ These are Cloudflare-proxied.
 - `loki.heytea.dev`
 - `otel.heytea.dev`
 - `postgres.heytea.dev`
-- `redis.heytea.dev`
 
-Postgres and Redis should bind only to localhost or Tailscale, not Caddy/public interfaces.
+Postgres should bind only to localhost or Tailscale, not Caddy/public interfaces.
 
 ## Backups
 

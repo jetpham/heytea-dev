@@ -7,6 +7,10 @@ let
     echo "${name} package has not been wired into the Nix build yet" >&2
     exit 1
   '';
+  migrationsPlaceholder = pkgs.runCommand "heytea-migrations-unconfigured" { } ''
+    mkdir -p $out/share/heytea/migrations
+  '';
+  migrationsDir = "${cfg.migrationsPackage}/share/heytea/migrations";
 in
 {
   options.services.heytea = {
@@ -21,16 +25,28 @@ in
     apiPackage = mkOption { type = types.package; default = placeholder "heytea-api"; };
     pollerPackage = mkOption { type = types.package; default = placeholder "heytea-poller"; };
     mcpPackage = mkOption { type = types.package; default = placeholder "heytea-mcp"; };
-    frontendRoot = mkOption { type = types.path; default = pkgs.runCommand "heytea-empty-frontend" { } "mkdir -p $out; echo placeholder > $out/index.html"; };
+    sitePackage = mkOption { type = types.package; default = placeholder "heytea-site"; };
+    migrationsPackage = mkOption { type = types.package; default = migrationsPlaceholder; };
   };
 
   config = mkIf cfg.enable {
+    users.groups.heytea = { };
+    users.users.heytea = {
+      isSystemUser = true;
+      group = "heytea";
+    };
+
     environment.etc."heytea/shop-id".text = "1000092\n";
 
     services.postgresql = {
       enable = true;
       package = pkgs.postgresql_16.withPackages (ps: [ ps.timescaledb ]);
       settings.shared_preload_libraries = "timescaledb";
+      authentication = lib.mkForce ''
+        local all all peer
+        host all all 127.0.0.1/32 reject
+        host all all ::1/128 reject
+      '';
       ensureDatabases = [ "heytea" "umami" ];
       ensureUsers = [
         {
@@ -44,19 +60,44 @@ in
       ];
     };
 
-    services.redis.servers.heytea = {
-      enable = true;
-      bind = "127.0.0.1";
-      port = 6379;
+    systemd.services.heytea-db-migrate = {
+      wantedBy = [ "multi-user.target" ];
+      requires = [ "postgresql.service" ];
+      after = [ "postgresql.service" ];
+      before = [ "heytea-api.service" "heytea-poller.service" ];
+      path = [ config.services.postgresql.package ];
+      serviceConfig = {
+        Type = "oneshot";
+        User = "postgres";
+        Group = "postgres";
+        RemainAfterExit = true;
+      };
+      script = ''
+        found=0
+        for migration in ${migrationsDir}/*.sql; do
+          if [ ! -e "$migration" ]; then
+            continue
+          fi
+          found=1
+          echo "applying $migration"
+          psql -v ON_ERROR_STOP=1 --dbname=heytea --file="$migration"
+        done
+        if [ "$found" -eq 0 ]; then
+          echo "no heytea migrations found in ${migrationsDir}" >&2
+          exit 1
+        fi
+      '';
     };
 
     systemd.services.heytea-api = {
       wantedBy = [ "multi-user.target" ];
-      after = [ "postgresql.service" "redis-heytea.service" ];
+      requires = [ "heytea-db-migrate.service" ];
+      after = [ "postgresql.service" "heytea-db-migrate.service" ];
       serviceConfig = {
         ExecStart = "${cfg.apiPackage}/bin/heytea-api";
         Restart = "always";
-        DynamicUser = true;
+        User = "heytea";
+        Group = "heytea";
       };
       environment = {
         DATABASE_URL = "postgres://heytea@/heytea?host=/run/postgresql";
@@ -67,11 +108,13 @@ in
 
     systemd.services.heytea-poller = {
       wantedBy = [ "multi-user.target" ];
-      after = [ "postgresql.service" ];
+      requires = [ "heytea-db-migrate.service" ];
+      after = [ "postgresql.service" "heytea-db-migrate.service" ];
       serviceConfig = {
         ExecStart = "${cfg.pollerPackage}/bin/heytea-poller";
         Restart = "always";
-        DynamicUser = true;
+        User = "heytea";
+        Group = "heytea";
         ReadOnlyPaths = [ cfg.shopConfigPath ];
       };
       environment = {
@@ -97,20 +140,73 @@ in
       };
     };
 
+    systemd.services.heytea-site = {
+      wantedBy = [ "multi-user.target" ];
+      after = [ "heytea-api.service" ];
+      serviceConfig = {
+        ExecStart = "${cfg.sitePackage}/bin/heytea-site";
+        Restart = "always";
+        DynamicUser = true;
+      };
+      environment = {
+        HEYTEA_SITE_BIND = "127.0.0.1:3100";
+        HEYTEA_API_URL = "http://127.0.0.1:3000";
+        HEYTEA_PUBLIC_API_URL = "https://${cfg.apiDomain}";
+      };
+    };
+
     services.caddy = {
       enable = true;
       virtualHosts.${cfg.domain}.extraConfig = ''
-        root * ${cfg.frontendRoot}
-        file_server
+        encode zstd gzip
+        handle /openapi.json {
+          reverse_proxy 127.0.0.1:3000
+        }
+        handle /mcp* {
+          reverse_proxy 127.0.0.1:3001
+        }
+        handle /assets/* {
+          header Cache-Control "public, max-age=31536000, immutable"
+          reverse_proxy 127.0.0.1:3100
+        }
+        handle /a.woff2 {
+          header Cache-Control "public, max-age=31536000, immutable"
+          reverse_proxy 127.0.0.1:3100
+        }
+        handle {
+          reverse_proxy 127.0.0.1:3100
+        }
       '';
       virtualHosts.${cfg.apiDomain}.extraConfig = ''
+        encode zstd gzip
         reverse_proxy 127.0.0.1:3000
       '';
       virtualHosts.${cfg.docsDomain}.extraConfig = ''
-        reverse_proxy 127.0.0.1:3000
+        encode zstd gzip
+        handle /openapi.json {
+          reverse_proxy 127.0.0.1:3000
+        }
+        handle / {
+          rewrite * /docs
+          reverse_proxy 127.0.0.1:3100
+        }
+        handle {
+          reverse_proxy 127.0.0.1:3100
+        }
       '';
       virtualHosts.${cfg.mcpDomain}.extraConfig = ''
+        encode zstd gzip
         reverse_proxy 127.0.0.1:3001
+      '';
+      virtualHosts.${cfg.statusDomain}.extraConfig = ''
+        encode zstd gzip
+        handle / {
+          rewrite * /status
+          reverse_proxy 127.0.0.1:3100
+        }
+        handle {
+          reverse_proxy 127.0.0.1:3100
+        }
       '';
     };
 
