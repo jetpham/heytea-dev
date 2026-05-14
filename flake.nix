@@ -174,7 +174,16 @@
               clippy
               pkg-config
               openssl
+              openssh
+              curl
+              dnsutils
               opentofu
+              doctl
+              cloudflared
+              flarectl
+              wrangler
+              tailscale
+              age
               sqlx-cli
               postgresql_16
               nodejs_22
