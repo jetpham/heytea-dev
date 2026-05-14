@@ -137,6 +137,18 @@
               runHook postInstall
             '';
           };
+
+          digitalOceanQcow2Image = pkgs.runCommand "heytea-dev-digital-ocean-qcow2-image" { nativeBuildInputs = [ pkgs.gzip ]; } ''
+            runHook preInstall
+
+            mkdir -p $out/nix-support
+            gzip -dc ${self.nixosConfigurations.heytea-bootstrap.config.system.build.images."digital-ocean"}/*.qcow2.gz \
+              > $out/heytea-dev-digital-ocean.qcow2
+            echo "file qcow2-image $out/heytea-dev-digital-ocean.qcow2" \
+              > $out/nix-support/hydra-build-products
+
+            runHook postInstall
+          '';
         in
         {
           packages = rec {
@@ -151,7 +163,7 @@
             heytea-assets = assets;
             default = heytea-cli;
           } // pkgs.lib.optionalAttrs (system == serverSystem) {
-            nixos-do-image = self.nixosConfigurations.heytea-bootstrap.config.system.build.images."digital-ocean";
+            nixos-do-image = digitalOceanQcow2Image;
           };
 
           devShells.default = pkgs.mkShell {

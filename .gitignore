@@ -1,9 +1,12 @@
 /target
 /.direnv
+/.jj
 /.env
 /.env.*
 /result
-/node_modules
+*.qcow2
+*.qcow2.gz
+node_modules
 /apps/*/.astro
 /apps/*/dist
 /.terraform

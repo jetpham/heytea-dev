@@ -10,9 +10,15 @@ nix build .#nixos-do-image
 
 The result is a DigitalOcean-compatible NixOS image from `nixosConfigurations.heytea-bootstrap`. It contains only enough NixOS, SSH, and Tailscale support to make the droplet reachable for the first deploy.
 
+The upload artifact is:
+
+```text
+result/heytea-dev-digital-ocean.qcow2
+```
+
 ## Upload The Image
 
-DigitalOcean custom images accept Linux images such as qcow2 or raw images. Upload the built image to the `sfo3` region with the control panel or `doctl`.
+DigitalOcean custom images accept Linux images such as qcow2 or raw images. Upload the built qcow2 image to the `sfo3` region with the control panel or `doctl`.
 
 Example shape:
 
