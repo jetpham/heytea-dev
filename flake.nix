@@ -6,9 +6,13 @@
     flake-utils.url = "github:numtide/flake-utils";
     deploy-rs.url = "github:serokell/deploy-rs";
     agenix.url = "github:ryantm/agenix";
+    disko = {
+      url = "github:nix-community/disko";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = inputs@{ self, nixpkgs, flake-utils, deploy-rs, agenix }:
+  outputs = inputs@{ self, nixpkgs, flake-utils, deploy-rs, agenix, disko }:
     let
       serverSystem = "x86_64-linux";
     in
@@ -184,6 +188,7 @@
               wrangler
               tailscale
               age
+              nixos-anywhere
               sqlx-cli
               postgresql_16
               nodejs_22
@@ -207,6 +212,14 @@
         system = serverSystem;
         modules = [
           ./nix/hosts/bootstrap.nix
+        ];
+      };
+
+      nixosConfigurations.heytea-install = nixpkgs.lib.nixosSystem {
+        system = serverSystem;
+        modules = [
+          disko.nixosModules.disko
+          ./nix/hosts/install.nix
         ];
       };
 
