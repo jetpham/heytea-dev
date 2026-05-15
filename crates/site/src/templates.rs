@@ -3,33 +3,35 @@ use askama::Template;
 use chrono::{DateTime, Utc};
 use chrono_tz::America::Los_Angeles;
 use heytea_core::{HistoryResponse, ReadyResponse, StatusResponse};
+use std::fmt::Write as _;
+
+const DASHBOARD_CSS: &str = include_str!("../templates/dashboard.css");
+const DASHBOARD_JS: &str = include_str!("../templates/dashboard.js");
+const DASHBOARD_FONT_B64: &str = include_str!("../templates/atkinson-ascii.woff2.b64");
+const FAVICON_SVG: &str = include_str!("../templates/heyteafavi.svg");
 
 #[derive(Template)]
 #[template(path = "dashboard.html")]
 pub struct DashboardTemplate {
-    pub assets: AssetTags,
     pub stream_url: String,
-    pub closed: bool,
+    pub favicon_href: String,
+    pub inline_css: String,
+    pub inline_js: &'static str,
     pub pickup_wait: String,
-    pub delivery_wait: String,
     pub making_cups: String,
     pub making_orders: String,
     pub observed: String,
     pub open: String,
-    pub fresh: String,
-    pub notice: String,
     pub closing_notice: String,
     pub trend_points: String,
     pub trend_data: String,
     pub trend_minute: i64,
-    pub trend_max: i32,
 }
 
 impl DashboardTemplate {
     pub fn new(
         status: Option<StatusResponse>,
         history: Option<HistoryResponse>,
-        assets: AssetTags,
         stream_url: String,
     ) -> Self {
         let values = history
@@ -43,8 +45,6 @@ impl DashboardTemplate {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let closed =
-            status.as_ref().and_then(|status| status.is_open) != Some(true) || values.is_empty();
         let trend_max = nice_axis(values.iter().copied().max().unwrap_or(0));
         let trend_points = values
             .iter()
@@ -71,18 +71,18 @@ impl DashboardTemplate {
             .unwrap_or_default();
 
         Self {
-            assets,
             stream_url,
-            closed,
+            favicon_href: svg_data_uri(FAVICON_SVG),
+            inline_css: format!(
+                "@font-face{{font-family:a;src:url(data:font/woff2;base64,{}) format('woff2');font-display:block}}{}",
+                DASHBOARD_FONT_B64.trim(),
+                DASHBOARD_CSS
+            ),
+            inline_js: DASHBOARD_JS,
             pickup_wait: minutes(
                 status
                     .as_ref()
                     .and_then(|status| status.pickup_wait_minutes),
-            ),
-            delivery_wait: minutes(
-                status
-                    .as_ref()
-                    .and_then(|status| status.delivery_estimate_minutes),
             ),
             making_cups: count(status.as_ref().and_then(|status| status.making_cups)),
             making_orders: count(status.as_ref().and_then(|status| status.making_orders)),
@@ -95,15 +95,6 @@ impl DashboardTemplate {
                 Some(false) => "no".to_string(),
                 None => "unknown".to_string(),
             },
-            fresh: if status.as_ref().map(|status| status.stale).unwrap_or(true) {
-                "stale".to_string()
-            } else {
-                "fresh".to_string()
-            },
-            notice: clip(
-                status.as_ref().and_then(|status| status.notice.as_deref()),
-                "No active notice",
-            ),
             closing_notice: clip(
                 status
                     .as_ref()
@@ -113,7 +104,6 @@ impl DashboardTemplate {
             trend_points,
             trend_data,
             trend_minute,
-            trend_max,
         }
     }
 }
@@ -229,6 +219,35 @@ fn clip(value: Option<&str>, fallback: &str) -> String {
     }
 }
 
+fn svg_data_uri(svg: &str) -> String {
+    let mut uri = String::from("data:image/svg+xml,");
+    for byte in svg.trim().bytes() {
+        match byte {
+            b' '
+            | b'"'
+            | b'#'
+            | b'%'
+            | b'&'
+            | b'<'
+            | b'>'
+            | b'?'
+            | b'`'
+            | b'{'
+            | b'}'
+            | b'|'
+            | b'\''
+            | b'\\'
+            | b'^'
+            | 0..=31
+            | 127..=255 => {
+                write!(&mut uri, "%{byte:02X}").expect("write to string");
+            }
+            _ => uri.push(byte as char),
+        }
+    }
+    uri
+}
+
 fn nice_axis(value: i32) -> i32 {
     match value {
         ..=5 => 5,
@@ -246,8 +265,6 @@ fn nice_axis(value: i32) -> i32 {
 mod tests {
     use super::*;
     use heytea_core::HistoryPoint;
-
-    const FONT_BYTES: usize = 7144;
 
     #[test]
     fn dashboard_payload_stays_small() {
@@ -286,14 +303,9 @@ mod tests {
         let template = DashboardTemplate::new(
             Some(status),
             Some(history),
-            AssetTags {
-                css: vec!["/assets/dashboard.css".to_string()],
-                scripts: vec!["/assets/dashboard.js".to_string()],
-            },
             "https://api.heytea.dev/stream".to_string(),
         );
         let html = template.render().expect("render dashboard");
-        let css = include_str!("../../../apps/assets/src/dashboard.css");
-        assert!(html.len() + css.len() + FONT_BYTES < 14 * 1024);
+        assert!(html.len() < 40 * 1024);
     }
 }

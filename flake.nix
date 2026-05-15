@@ -1,6 +1,11 @@
 {
   description = "heytea.dev singleton wait-time dashboard";
 
+  nixConfig = {
+    max-jobs = "auto";
+    cores = 0;
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
@@ -205,6 +210,25 @@
           };
 
           formatter = pkgs.nixpkgs-fmt;
+
+          apps.deploy = {
+            type = "app";
+            program = "${pkgs.writeShellScript "deploy-heytea" ''
+              if [ "$#" -eq 0 ] || [ "''${1#-}" != "$1" ]; then
+                exec ${deploy-rs.packages.${system}.deploy-rs}/bin/deploy \
+                  --auto-rollback true \
+                  --magic-rollback true \
+                  path:.# \
+                  "$@"
+              fi
+
+              exec ${deploy-rs.packages.${system}.deploy-rs}/bin/deploy \
+                --auto-rollback true \
+                --magic-rollback true \
+                "$@"
+            ''}";
+            meta.description = "Deploy heytea.dev with deploy-rs rollback protection";
+          };
         }) // {
       nixosModules.heytea = import ./nix/modules/heytea.nix;
 
@@ -245,6 +269,7 @@
 
       deploy.nodes."heytea-dev" = {
         hostname = "heytea-dev";
+        sshUser = "root";
         profiles.system = {
           user = "root";
           path = deploy-rs.lib.x86_64-linux.activate.nixos self.nixosConfigurations.heytea-dev;

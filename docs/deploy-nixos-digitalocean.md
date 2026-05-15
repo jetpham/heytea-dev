@@ -1,115 +1,143 @@
 # NixOS DigitalOcean Deploy
 
-This is the preferred first-production path for `heytea.dev`: build a minimal NixOS DigitalOcean bootstrap image, upload it to DigitalOcean, create the `heytea-dev` droplet with OpenTofu, then use deploy-rs for full production updates.
+This is the current production path for `heytea.dev`: create a stock Ubuntu DigitalOcean droplet, install NixOS with `nixos-anywhere`, then use deploy-rs for production updates. The custom image and OpenTofu files under `infra/opentofu` are retained as legacy/manual reference only.
 
-## Build The Image
+## Prerequisites
 
-```sh
-nix build .#nixos-do-image
-```
-
-The result is a DigitalOcean-compatible NixOS image from `nixosConfigurations.heytea-bootstrap`. It contains only enough NixOS, SSH, and Tailscale support to make the droplet reachable for the first deploy.
-
-The upload artifact is:
-
-```text
-result/heytea-dev-digital-ocean.qcow2
-```
-
-## Upload The Image
-
-DigitalOcean custom images accept Linux images such as qcow2 or raw images. Upload the built qcow2 image to the `sfo3` region with the control panel or `doctl`.
-
-Example shape:
+Run commands from the repository root with the flake dev shell:
 
 ```sh
-doctl compute image create heytea-nixos \
-  --image-url "https://example.com/heytea-nixos-image.qcow2" \
-  --region sfo3
+nix develop "path:$PWD" -c <command>
 ```
 
-If you upload through the web UI, copy the resulting custom image ID. Do not commit that ID unless you intentionally want it as shared infrastructure state.
+The ignored `.env` file should contain the operational API tokens used for manual bootstrap, including `DIGITALOCEAN_TOKEN` and `CLOUDFLARE_API_TOKEN`.
 
-## Provision Infrastructure
+Runtime secrets are managed with agenix. Required production secrets are:
 
-Create a local, ignored `infra/opentofu/tofu.tfvars`:
+- `secrets/tailscale-auth-key.age`
+- `secrets/grafana-secret-key.age`
+- `secrets/grafana-admin-password.age`
+- `secrets/umami-app-secret.age`
 
-```hcl
-droplet_image        = "<digitalocean-custom-image-id>"
-ssh_key_fingerprint = "<digitalocean-ssh-key-fingerprint>"
-cloudflare_account_id = "<cloudflare-account-id>"
-bootstrap_ssh_source_addresses = ["<your-current-public-ip>/32"]
-```
+## Create The Droplet
 
-Then validate and apply only when ready:
+Create a normal Ubuntu 24.04 droplet in `sfo3`, attach a firewall, and allow only:
+
+- TCP `80` from `0.0.0.0/0`
+- TCP `443` from `0.0.0.0/0`
+- TCP `22` temporarily from the operator's current public `/32`
+
+Use the droplet name `heytea-dev`. The production host configuration expects the hostname and Tailscale node name to be `heytea-dev`.
+
+## Install NixOS
+
+Use the installer configuration, which includes the DigitalOcean disk layout and ConfigDrive networking:
 
 ```sh
-cd infra/opentofu
-tofu init
-tofu plan
-tofu apply
+nix develop "path:$PWD" -c nixos-anywhere \
+  --flake "path:$PWD#heytea-install" \
+  root@<droplet-ip>
 ```
 
-## Bootstrap Tailscale
-
-The previously pasted Tailscale auth key must be revoked. Create a fresh auth key with these properties:
-
-- preauthorized
-- single-use
-- short expiry
-- non-ephemeral for this production server
-
-After the droplet boots, SSH in with the configured public key and run:
+After the reboot, verify the host is reachable and running NixOS:
 
 ```sh
-ssh root@<droplet-ip>
-tailscale up --auth-key=<fresh-key> --hostname=heytea-dev --advertise-tags=tag:server
+ssh root@<droplet-ip> nixos-version
+ssh root@<droplet-ip> hostname
 ```
 
-After the node appears in Tailscale, remove `bootstrap_ssh_source_addresses` from `tofu.tfvars` and apply OpenTofu again to close public SSH:
+## First Production Deploy
+
+The first full deploy can target the public IP while the temporary SSH firewall rule is still open:
 
 ```sh
-tofu apply
+nix --accept-flake-config run "path:$PWD#deploy" -- \
+  --hostname <droplet-ip> \
+  --ssh-user root
 ```
 
-Administrative SSH should go over Tailscale after bootstrap:
+This activates `nixosConfigurations.heytea-dev`, starts the API, poller, MCP server, site, Caddy, Postgres/TimescaleDB, Grafana, Umami, and Tailscale.
+
+## Tailscale Deploys
+
+After Tailscale joins, trust the host key over the tailnet:
 
 ```sh
-ssh root@heytea-dev
+ssh -o StrictHostKeyChecking=accept-new root@heytea-dev true
 ```
 
-## Secrets
-
-Do not bake secrets into the image, OpenTofu state, or Git.
-
-The image contains service definitions and public configuration only. Runtime secrets should be added through agenix before production use. Required secrets currently include:
-
-- Grafana secret key at `/run/agenix/grafana-secret-key`
-- Future backup credentials for Backblaze B2/restic
-- Future analytics secrets, if Umami is enabled
-- Optional Tailscale bootstrap key at `/run/agenix/tailscale-auth-key`, if manual bootstrap is replaced
-
-For the first boot, Tailscale can be bootstrapped manually with a fresh one-time key. After that, use deploy-rs over the tailnet.
-
-## Deploy Updates
-
-Once the droplet is reachable as `heytea-dev` on Tailscale:
+Future deploys should use the default deploy-rs target over Tailscale:
 
 ```sh
-deploy .#heytea-dev
+nix --accept-flake-config run "path:$PWD#deploy"
 ```
 
-The deploy target is defined in `flake.nix` and activates `nixosConfigurations.heytea-dev` as root.
+The deploy node is defined in `flake.nix` as `deploy.nodes."heytea-dev"` with `sshUser = "root"`.
+
+## DNS
+
+Create DNS-only Cloudflare `A` records pointing at the droplet IPv4 for:
+
+- `heytea.dev`
+- `api.heytea.dev`
+- `docs.heytea.dev`
+- `mcp.heytea.dev`
+- `analytics.heytea.dev`
+- `status.heytea.dev`
+
+Keep these records DNS-only unless Caddy and ACME challenge handling are intentionally changed. Caddy terminates public HTTPS on the droplet.
 
 ## Verify
 
-After activation:
+Check system health over Tailscale:
 
 ```sh
-curl https://api.heytea.dev/readyz
-curl https://api.heytea.dev/status
-curl -N https://api.heytea.dev/stream
-curl https://heytea.dev/llms.txt
+ssh root@heytea-dev systemctl is-system-running
+ssh root@heytea-dev systemctl --failed --no-pager
 ```
 
-Then run an AgentGrade scan once DNS and Cloudflare proxying are live.
+Check public endpoints after DNS propagates:
+
+```sh
+curl https://heytea.dev/
+curl https://api.heytea.dev/readyz
+curl https://api.heytea.dev/status
+curl https://api.heytea.dev/wait-time
+curl https://docs.heytea.dev/
+curl https://mcp.heytea.dev/
+curl https://analytics.heytea.dev/
+curl https://status.heytea.dev/
+```
+
+If the local resolver has stale negative cache immediately after DNS creation, validate against the droplet directly while preserving TLS hostname verification:
+
+```sh
+curl --resolve api.heytea.dev:443:<droplet-ip> https://api.heytea.dev/status
+```
+
+## Lock Down SSH
+
+Once deploy-rs and SSH work over Tailscale, remove public TCP `22` from the DigitalOcean firewall:
+
+```sh
+nix develop "path:$PWD" -c doctl compute firewall remove-rules <firewall-id> \
+  --access-token "$DIGITALOCEAN_TOKEN" \
+  --inbound-rules "protocol:tcp,ports:22,address:<operator-public-ip>/32"
+```
+
+Confirm public SSH is blocked and tailnet SSH still works:
+
+```sh
+ssh root@heytea-dev true
+ssh -o BatchMode=yes -o ConnectTimeout=8 root@<droplet-ip> true
+```
+
+## CI/CD
+
+The GitHub Actions deploy workflow expects:
+
+- `TS_OAUTH_CLIENT_ID`
+- `TS_OAUTH_SECRET`
+- `DEPLOY_SSH_KEY`
+
+Do not push deployment changes until those secrets are configured.

@@ -1,1 +1,76 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>heytea.dev | Downtown Metreon Wait Time</title><meta name="description" content="Live wait time and status for HeyTea Downtown Metreon at 165 4th St, San Francisco."><meta name="theme-color" content="#101510"><link rel="canonical" href="https://heytea.dev/"><link rel="preload" href="/a.woff2" as="font" type="font/woff2" crossorigin><link rel="manifest" href="/site.webmanifest"><link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt"><link rel="alternate" type="text/plain" title="llms-full.txt" href="/llms-full.txt"><meta property="og:title" content="heytea.dev"><meta property="og:description" content="Live status for HeyTea Downtown Metreon."><meta property="og:image" content="https://heytea.dev/og.svg"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="https://heytea.dev/og.svg"><script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://heytea.dev/#org","name":"heytea.dev","url":"https://heytea.dev/","logo":"https://heytea.dev/icon.svg","description":"Live wait time and status for HeyTea Downtown Metreon."},{"@type":"WebSite","@id":"https://heytea.dev/#site","name":"heytea.dev","url":"https://heytea.dev/","description":"Live wait time and status dashboard for HeyTea Downtown Metreon."},{"@type":"WebApplication","name":"heytea.dev","url":"https://heytea.dev/","applicationCategory":"FoodAndDrinkApplication","operatingSystem":"Web","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}]}</script>{% for href in assets.css %}<link rel="stylesheet" href="{{ href }}">{% endfor %}</head><body><main id="app" data-stream-url="{{ stream_url }}"{% if closed %} class="closed"{% endif %}><div class="top"><div><p class="e">heytea.dev</p><h1>Downtown Metreon wait time</h1><p class="sub">Live pickup status for 165 4th St, San Francisco.</p></div><span id="s">connecting</span></div><div id="shut">Store is currently closed.</div><section class="g" aria-label="Current status"><article><span class="l">Pickup</span><b id="w" class="n">{{ pickup_wait }}</b></article><article><span class="l">Delivery</span><b id="d" class="n">{{ delivery_wait }}</b></article><article><span class="l">Cups</span><b id="c" class="n">{{ making_cups }}</b></article><article><span class="l">Orders</span><b id="o" class="n">{{ making_orders }}</b></article></section><section class="d"><div class="p"><p class="e">Today</p><svg viewBox="0 0 100 44" role="img" aria-label="Pickup wait trend"><path class="axis" d="M0 8H100M0 38H100"></path><polyline id="trend" points="{{ trend_points }}" data-v="{{ trend_data }}" data-m="{{ trend_minute }}"></polyline></svg><small><span id="ym">{{ trend_max }}m</span> max axis. Last updated <span id="xr">{{ observed }}</span>.</small></div><div class="p"><dl><div><dt>Observed</dt><dd id="obs" class="n">{{ observed }}</dd></div><div><dt>Open</dt><dd id="open">{{ open }}</dd></div><div><dt>Fresh</dt><dd id="fresh">{{ fresh }}</dd></div><div><dt>Notice</dt><dd id="notice">{{ notice }}</dd></div><div><dt>Closing</dt><dd id="closing">{{ closing_notice }}</dd></div></dl></div></section></main>{% for src in assets.scripts %}<script type="module" src="{{ src }}"></script>{% endfor %}</body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>heytea.dev</title>
+  <meta name="description" content="Live wait time for HeyTea Downtown Metreon.">
+  <meta name="theme-color" content="#ffffff">
+  <link rel="canonical" href="https://heytea.dev/">
+  <link rel="icon" href="{{ favicon_href }}" type="image/svg+xml">
+  <link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt">
+  <style>{{ inline_css|safe }}</style>
+</head>
+<body>
+  <main id="app" data-stream-url="{{ stream_url }}">
+    <table class="header" aria-label="Page header">
+      <tr>
+        <th>APP</th>
+        <td>heytea.dev</td>
+        <th>MODE</th>
+        <td>live</td>
+      </tr>
+      <tr>
+        <th>STORE</th>
+        <td>Downtown Metreon</td>
+        <th>SIGNAL</th>
+        <td>pickup</td>
+      </tr>
+    </table>
+
+    <section aria-labelledby="current-title">
+      <p id="current-title" class="label">CURRENT</p>
+      <table aria-label="Current pickup status">
+        <tr>
+          <th>Pickup</th>
+          <td id="w">{{ pickup_wait }}</td>
+        </tr>
+        <tr>
+          <th>Cups</th>
+          <td id="c">{{ making_cups }}</td>
+        </tr>
+        <tr>
+          <th>Orders</th>
+          <td id="o">{{ making_orders }}</td>
+        </tr>
+      </table>
+    </section>
+
+    <section aria-labelledby="store-title">
+      <p id="store-title" class="label">STORE</p>
+      <table aria-label="Store status">
+        <tr>
+          <th>Observed</th>
+          <td id="obs">{{ observed }}</td>
+        </tr>
+        <tr>
+          <th>Open</th>
+          <td id="open">{{ open }}</td>
+        </tr>
+        <tr>
+          <th>Closing</th>
+          <td id="closing">{{ closing_notice }}</td>
+        </tr>
+      </table>
+    </section>
+
+    <section aria-labelledby="history-title">
+      <p id="history-title" class="label">PICKUP HISTORY</p>
+      <svg class="sparkline" viewBox="0 0 100 40" preserveAspectRatio="none" aria-label="Pickup wait trend" role="img">
+        <polyline id="trend" data-v="{{ trend_data }}" data-m="{{ trend_minute }}" points="{{ trend_points }}"></polyline>
+      </svg>
+    </section>
+  </main>
+  <script>{{ inline_js|safe }}</script>
+</body>
+</html>

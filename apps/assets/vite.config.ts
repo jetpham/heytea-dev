@@ -9,7 +9,6 @@ export default defineConfig({
     assetsDir: "assets",
     rollupOptions: {
       input: {
-        dashboard: "src/dashboard.ts",
         docs: "src/docs.ts",
         status: "src/status.ts",
       },

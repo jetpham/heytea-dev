@@ -148,31 +148,31 @@ pub async fn history(
             ), day_start as (
               select date_trunc('day', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles' as start_at
             ), last_closed as (
-              select max(observed_at) as observed_at
-              from wait_time_observations, day_start
-              where observed_at >= day_start.start_at
-                and is_open is distinct from true
+              select max(w.observed_at) as observed_at
+              from wait_time_observations w, day_start
+              where w.observed_at >= day_start.start_at
+                and w.is_open is distinct from true
             ), open_start as (
-              select min(observed_at) as start_at
-              from wait_time_observations, day_start, last_closed
-              where observed_at >= day_start.start_at
-                and is_open is true
-                and (last_closed.observed_at is null or observed_at > last_closed.observed_at)
+              select min(w.observed_at) as start_at
+              from wait_time_observations w, day_start, last_closed
+              where w.observed_at >= day_start.start_at
+                and w.is_open is true
+                and (last_closed.observed_at is null or w.observed_at > last_closed.observed_at)
             )
             select
-              time_bucket('1 minute'::interval, observed_at) as start,
-              avg(pickup_wait_minutes)::float8 as avg_pickup_wait_minutes,
-              min(pickup_wait_minutes) as min_pickup_wait_minutes,
-              max(pickup_wait_minutes) as max_pickup_wait_minutes,
-              avg(delivery_estimate_minutes)::float8 as avg_delivery_estimate_minutes,
-              avg(making_cups)::float8 as avg_making_cups,
-              avg(making_orders)::float8 as avg_making_orders,
+              time_bucket('1 minute'::interval, w.observed_at) as start,
+              avg(w.pickup_wait_minutes)::float8 as avg_pickup_wait_minutes,
+              min(w.pickup_wait_minutes) as min_pickup_wait_minutes,
+              max(w.pickup_wait_minutes) as max_pickup_wait_minutes,
+              avg(w.delivery_estimate_minutes)::float8 as avg_delivery_estimate_minutes,
+              avg(w.making_cups)::float8 as avg_making_cups,
+              avg(w.making_orders)::float8 as avg_making_orders,
               count(*)::int8 as sample_count
-            from wait_time_observations, open_start, current
+            from wait_time_observations w, open_start, current
             where current.is_open is true
               and open_start.start_at is not null
-              and observed_at >= open_start.start_at
-              and is_open is true
+              and w.observed_at >= open_start.start_at
+              and w.is_open is true
             group by 1
             order by 1 asc
             "#

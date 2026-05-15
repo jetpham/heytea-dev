@@ -47,14 +47,10 @@ in
         host all all 127.0.0.1/32 reject
         host all all ::1/128 reject
       '';
-      ensureDatabases = [ "heytea" "umami" ];
+      ensureDatabases = [ "heytea" ];
       ensureUsers = [
         {
           name = "heytea";
-          ensureDBOwnership = true;
-        }
-        {
-          name = "umami";
           ensureDBOwnership = true;
         }
       ];
@@ -62,8 +58,8 @@ in
 
     systemd.services.heytea-db-migrate = {
       wantedBy = [ "multi-user.target" ];
-      requires = [ "postgresql.service" ];
-      after = [ "postgresql.service" ];
+      requires = [ "postgresql.service" "postgresql-setup.service" ];
+      after = [ "postgresql.service" "postgresql-setup.service" ];
       before = [ "heytea-api.service" "heytea-poller.service" ];
       path = [ config.services.postgresql.package ];
       serviceConfig = {
@@ -100,7 +96,7 @@ in
         Group = "heytea";
       };
       environment = {
-        DATABASE_URL = "postgres://heytea@/heytea?host=/run/postgresql";
+        DATABASE_URL = "postgresql:///heytea?host=/run/postgresql&user=heytea";
         HEYTEA_API_BIND = "127.0.0.1:3000";
         RUST_LOG = "info";
       };
@@ -118,7 +114,7 @@ in
         ReadOnlyPaths = [ cfg.shopConfigPath ];
       };
       environment = {
-        DATABASE_URL = "postgres://heytea@/heytea?host=/run/postgresql";
+        DATABASE_URL = "postgresql:///heytea?host=/run/postgresql&user=heytea";
         HEYTEA_SHOP_CONFIG = toString cfg.shopConfigPath;
         HEYTEA_POLLER_INTERVAL_SECONDS = "60";
         RUST_LOG = "info";
@@ -158,7 +154,10 @@ in
     services.caddy = {
       enable = true;
       virtualHosts.${cfg.domain}.extraConfig = ''
-        encode zstd gzip
+        encode {
+          zstd best
+          gzip 9
+        }
         handle /openapi.json {
           reverse_proxy 127.0.0.1:3000
         }
@@ -178,11 +177,17 @@ in
         }
       '';
       virtualHosts.${cfg.apiDomain}.extraConfig = ''
-        encode zstd gzip
+        encode {
+          zstd best
+          gzip 9
+        }
         reverse_proxy 127.0.0.1:3000
       '';
       virtualHosts.${cfg.docsDomain}.extraConfig = ''
-        encode zstd gzip
+        encode {
+          zstd best
+          gzip 9
+        }
         handle /openapi.json {
           reverse_proxy 127.0.0.1:3000
         }
@@ -195,11 +200,17 @@ in
         }
       '';
       virtualHosts.${cfg.mcpDomain}.extraConfig = ''
-        encode zstd gzip
+        encode {
+          zstd best
+          gzip 9
+        }
         reverse_proxy 127.0.0.1:3001
       '';
       virtualHosts.${cfg.statusDomain}.extraConfig = ''
-        encode zstd gzip
+        encode {
+          zstd best
+          gzip 9
+        }
         handle / {
           rewrite * /status
           reverse_proxy 127.0.0.1:3100
@@ -207,6 +218,13 @@ in
         handle {
           reverse_proxy 127.0.0.1:3100
         }
+      '';
+      virtualHosts.${cfg.analyticsDomain}.extraConfig = ''
+        encode {
+          zstd best
+          gzip 9
+        }
+        reverse_proxy 127.0.0.1:3003
       '';
     };
 

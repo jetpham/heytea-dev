@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
@@ -19,6 +19,7 @@ impl HeyTeaClient {
             HeaderValue::from_static("application/prs.heytea.v1+json"),
         );
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(USER_AGENT, HeaderValue::from_static("okhttp/4.12.0"));
         headers.insert("Client", HeaderValue::from_static("2"));
         headers.insert("X-client", HeaderValue::from_static("app"));
         headers.insert("X-version", HeaderValue::from_static("2.3.1"));

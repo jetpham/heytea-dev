@@ -72,7 +72,6 @@ async fn dashboard(
     let template = templates::DashboardTemplate::new(
         status,
         history,
-        state.assets.tags("src/dashboard.ts", true),
         format!("{}/stream", state.public_api_url.trim_end_matches('/')),
     );
     Ok((html_shell_headers(), Html(template.render()?)).into_response())
@@ -371,7 +370,7 @@ fn agent_user_agent(headers: &HeaderMap) -> bool {
 fn html_shell_headers() -> HeaderMap {
     typed_headers(
         "text/html; charset=utf-8",
-        "public, max-age=31536000, immutable",
+        "public, max-age=30, must-revalidate",
     )
 }
 
