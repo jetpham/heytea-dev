@@ -1,4 +1,4 @@
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, modulesPath, ... }:
 
 let
   hasGrafanaSecret = builtins.pathExists ../../secrets/grafana-secret-key.age;
@@ -8,6 +8,10 @@ let
 in
 
 {
+  imports = [
+    "${modulesPath}/virtualisation/digital-ocean-config.nix"
+  ];
+
   networking.hostName = "heytea-dev";
   time.timeZone = "America/Los_Angeles";
 

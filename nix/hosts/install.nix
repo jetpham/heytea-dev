@@ -2,7 +2,7 @@
 
 {
   imports = [
-    "${modulesPath}/profiles/qemu-guest.nix"
+    "${modulesPath}/virtualisation/digital-ocean-config.nix"
     ../disko/digitalocean.nix
   ];
 
