@@ -17,7 +17,6 @@ Live values are considered fresh until the next expected poll: `ttl_seconds = ma
 - Postgres + TimescaleDB for canonical state and history
 - Postgres notifications for live SSE fanout; no Redis cache
 - NixOS, Caddy, deploy-rs, agenix
-- OpenTofu for DigitalOcean and Cloudflare
 - Umami analytics, Prometheus, Loki, Grafana, OpenTelemetry, blackbox_exporter
 - Daily Backblaze B2 backups via restic
 
@@ -53,14 +52,6 @@ nix build .#heytea-api .#heytea-poller .#heytea-mcp .#heytea-cli .#heytea-assets
 
 GitHub Actions run CI on pull requests and pushes to `main`, deploy production after successful CI on `main`, publish the Rust SDK from GitHub releases, and attach the Linux CLI tarball to releases. See `docs/ci-cd.md` for required GitHub secrets, environments, and Tailscale/crates.io setup.
 
-## DigitalOcean NixOS Image
+## DigitalOcean NixOS Deploy
 
-Build the production NixOS custom image with:
-
-```sh
-nix build .#nixos-do-image
-```
-
-Upload it as a DigitalOcean custom image and pass the resulting image ID to OpenTofu as `droplet_image`. See `docs/deploy-nixos-digitalocean.md`.
-
-Do not run OpenTofu `apply` or deploy commands unless you intend to provision infrastructure.
+Production uses a normal DigitalOcean Ubuntu droplet, `nixos-anywhere` for the initial NixOS install, and deploy-rs for updates. See `docs/deploy-nixos-digitalocean.md`.

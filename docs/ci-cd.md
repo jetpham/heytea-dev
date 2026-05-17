@@ -128,11 +128,11 @@ The current release artifact target is Linux x86_64. Additional portable/static 
 
 ## Infrastructure Tokens
 
-The deploy workflow does not run OpenTofu apply. These tokens are only needed for manual infrastructure changes today:
+The deploy workflow does not provision infrastructure. These tokens are only needed for manual infrastructure changes today:
 
 - `DIGITALOCEAN_TOKEN`
 - `CLOUDFLARE_API_TOKEN`
-- Backblaze B2 credentials for OpenTofu/restic setup, if changing backup infrastructure.
+- Backblaze B2 credentials for restic setup, if changing backup infrastructure.
 
 ## First Push Checklist
 

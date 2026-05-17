@@ -1,6 +1,6 @@
 # NixOS DigitalOcean Deploy
 
-This is the current production path for `heytea.dev`: create a stock Ubuntu DigitalOcean droplet, install NixOS with `nixos-anywhere`, then use deploy-rs for production updates. The custom image and OpenTofu files under `infra/opentofu` are retained as legacy/manual reference only.
+This is the current production path for `heytea.dev`: create a stock Ubuntu DigitalOcean droplet, install NixOS with `nixos-anywhere`, then use deploy-rs for production updates. OpenTofu is not part of the active production path.
 
 ## Prerequisites
 

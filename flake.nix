@@ -156,17 +156,6 @@
             '';
           };
 
-          digitalOceanQcow2Image = pkgs.runCommand "heytea-dev-digital-ocean-qcow2-image" { nativeBuildInputs = [ pkgs.gzip ]; } ''
-            runHook preInstall
-
-            mkdir -p $out/nix-support
-            gzip -dc ${self.nixosConfigurations.heytea-bootstrap.config.system.build.images."digital-ocean"}/*.qcow2.gz \
-              > $out/heytea-dev-digital-ocean.qcow2
-            echo "file qcow2-image $out/heytea-dev-digital-ocean.qcow2" \
-              > $out/nix-support/hydra-build-products
-
-            runHook postInstall
-          '';
         in
         {
           packages = rec {
@@ -180,8 +169,6 @@
             heytea = heytea-cli;
             heytea-assets = assets;
             default = heytea-cli;
-          } // pkgs.lib.optionalAttrs (system == serverSystem) {
-            nixos-do-image = digitalOceanQcow2Image;
           };
 
           devShells.default = pkgs.mkShell {
@@ -195,7 +182,6 @@
               openssh
               curl
               dnsutils
-              opentofu
               doctl
               cloudflared
               flarectl
@@ -243,13 +229,6 @@
           };
         }) // {
       nixosModules.heytea = import ./nix/modules/heytea.nix;
-
-      nixosConfigurations.heytea-bootstrap = nixpkgs.lib.nixosSystem {
-        system = serverSystem;
-        modules = [
-          ./nix/hosts/bootstrap.nix
-        ];
-      };
 
       nixosConfigurations.heytea-install = nixpkgs.lib.nixosSystem {
         system = serverSystem;

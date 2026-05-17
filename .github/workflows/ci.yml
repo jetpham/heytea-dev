@@ -37,5 +37,3 @@ jobs:
         run: git diff --check
       - name: Build packages
         run: nix --accept-flake-config build .#heytea-api .#heytea-poller .#heytea-mcp .#heytea-cli .#heytea-assets .#heytea-site-assets .#heytea-site .#heytea-migrations --no-link
-      - name: OpenTofu validate
-        run: nix develop --accept-flake-config -c sh -c 'cd infra/opentofu && tofu init -backend=false && tofu validate'
