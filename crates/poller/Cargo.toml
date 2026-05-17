@@ -9,6 +9,7 @@ authors.workspace = true
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+futures.workspace = true
 heytea-core = { path = "../core" }
 reqwest.workspace = true
 serde.workspace = true

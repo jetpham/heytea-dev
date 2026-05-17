@@ -5,12 +5,18 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Rust SDK for the singleton heytea.dev API"
+description = "Rust SDK for the heytea.dev location and wait-time API"
+homepage = "https://heytea.dev"
+documentation = "https://docs.rs/heytea"
+readme = "README.md"
+keywords = ["heytea", "tea", "api", "sdk"]
+categories = ["api-bindings", "web-programming::http-client"]
+rust-version = "1.89"
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 futures.workspace = true
-heytea-core = { path = "../core" }
 reqwest.workspace = true
 serde.workspace = true
 tokio-stream.workspace = true

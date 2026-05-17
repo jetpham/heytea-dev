@@ -1,22 +1,26 @@
 use crate::{error::SiteError, templates, AppState};
 use askama::Template;
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::get,
     Json, Router,
 };
-use heytea_core::{HistoryResponse, ReadyResponse, StatusResponse};
-use serde::de::DeserializeOwned;
+use chrono::Utc;
+use heytea_core::{
+    HistoryResponse, LocationPath, LocationResponse, LocationsResponse, StatusResponse,
+};
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::json;
+use std::collections::{BTreeSet, HashMap};
 use tower_http::services::{ServeDir, ServeFile};
 
 pub fn router(state: AppState) -> Router {
     let asset_root = state.assets.root();
 
     Router::new()
-        .route("/", get(dashboard))
+        .route("/", get(finder))
         .route("/status", get(status))
         .route("/docs", get(docs))
         .route("/robots.txt", get(robots))
@@ -37,20 +41,18 @@ pub fn router(state: AppState) -> Router {
         .route("/.well-known/webmcp.json", get(webmcp_json))
         .nest_service("/assets", ServeDir::new(asset_root.join("assets")))
         .route_service("/a.woff2", ServeFile::new(asset_root.join("a.woff2")))
+        .route("/:slug", get(location_dashboard))
         .fallback(not_found)
         .with_state(state)
 }
 
-async fn dashboard(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Response, SiteError> {
+async fn finder(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, SiteError> {
     if wants_json(&headers) {
         return Ok((
             negotiated_headers("public, max-age=60, must-revalidate"),
             Json(json!({
                 "name": "heytea.dev",
-                "description": "Live wait time and status for HeyTea Downtown Metreon.",
+                "description": "Location finder and live pickup waits for HeyTea.",
                 "api": "https://api.heytea.dev/openapi.json",
                 "mcp": "https://mcp.heytea.dev/mcp",
                 "llms": "https://heytea.dev/llms.txt"
@@ -65,25 +67,75 @@ async fn dashboard(
         return Ok(text(LLMS_TXT).into_response());
     }
 
+    let locations = api_json::<LocationsResponse>(&state, "/locations").await;
+    let template = templates::FinderTemplate::new(locations);
+    Ok((html_shell_headers(""), Html(template.render()?)).into_response())
+}
+
+async fn location_dashboard(
+    State(state): State<AppState>,
+    Path(path): Path<LocationPath>,
+    headers: HeaderMap,
+) -> Result<Response, SiteError> {
+    if wants_json(&headers) {
+        let location =
+            api_json::<LocationResponse>(&state, &format!("/locations/{}", path.slug)).await;
+        return match location {
+            Some(location) => Ok((short_cache_headers(30), Json(location)).into_response()),
+            None => Ok(not_found(headers).await),
+        };
+    }
+
+    let location_path = format!("/locations/{}", path.slug);
+    let Some(location) = api_json::<LocationResponse>(&state, &location_path).await else {
+        return Ok(not_found(headers).await);
+    };
+    let status_path = format!("/locations/{}/status", path.slug);
+    let history_path = format!("/locations/{}/history?range=today", path.slug);
     let (status, history) = tokio::join!(
-        api_json::<StatusResponse>(&state, "/status"),
-        api_json::<HistoryResponse>(&state, "/history?range=today")
+        api_json::<StatusResponse>(&state, &status_path),
+        api_json::<HistoryResponse>(&state, &history_path)
     );
-    let template = templates::DashboardTemplate::new(
-        status,
-        history,
-        format!("{}/stream", state.public_api_url.trim_end_matches('/')),
+    let stream_url = format!(
+        "{}/locations/{}/stream",
+        state.public_api_url.trim_end_matches('/'),
+        path.slug
     );
-    Ok((html_shell_headers(), Html(template.render()?)).into_response())
+    let template = templates::DashboardTemplate::new(status, history, stream_url.clone(), location);
+    Ok((html_shell_headers(&stream_url), Html(template.render()?)).into_response())
 }
 
 async fn status(State(state): State<AppState>) -> Result<Response, SiteError> {
-    let (ready, status) = tokio::join!(
-        api_check::<ReadyResponse>(&state, "/readyz"),
-        api_check::<StatusResponse>(&state, "/status")
+    let (success, uptime, latency) = tokio::join!(
+        prometheus_query(&state, r#"probe_success{job="blackbox-public"}"#),
+        prometheus_query(
+            &state,
+            r#"avg_over_time(probe_success{job="blackbox-public"}[24h]) * 100"#
+        ),
+        prometheus_query(
+            &state,
+            r#"probe_duration_seconds{job="blackbox-public"} * 1000"#
+        )
     );
-    let template =
-        templates::StatusTemplate::new(ready, status, state.assets.tags("src/status.ts", false));
+    let components = status_components(success, uptime, latency);
+    let all_operational = !components.is_empty()
+        && components
+            .iter()
+            .all(|component| component.class_name == "ok");
+    let template = templates::StatusTemplate {
+        assets: state.assets.tags("src/status.ts", false),
+        summary: if all_operational {
+            "All systems operational"
+        } else if components.is_empty() {
+            "Monitoring unavailable"
+        } else {
+            "Some systems degraded"
+        }
+        .to_string(),
+        summary_class: if all_operational { "ok" } else { "bad" }.to_string(),
+        checked: templates::site_time(Utc::now()),
+        components,
+    };
     Ok((short_cache_headers(30), Html(template.render()?)).into_response())
 }
 
@@ -126,7 +178,7 @@ async fn manifest() -> impl IntoResponse {
         Json(json!({
             "name": "heytea.dev",
             "short_name": "heytea.dev",
-            "description": "Live wait time and status for HeyTea Downtown Metreon.",
+            "description": "Live wait time and status for HeyTea locations.",
             "start_url": "/",
             "display": "standalone",
             "background_color": "#09100c",
@@ -137,15 +189,24 @@ async fn manifest() -> impl IntoResponse {
 }
 
 async fn icon() -> impl IntoResponse {
-    svg(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="28" fill="#09100c"/><circle cx="64" cy="64" r="42" fill="#80e36a" opacity=".18"/><path d="M35 47h58l-8 48H43L35 47Z" fill="#f3faef"/><path d="M45 34h38" stroke="#80e36a" stroke-width="10" stroke-linecap="round"/><path d="M50 60h28" stroke="#09100c" stroke-width="7" stroke-linecap="round"/></svg>"##,
+    svg_owned(
+        templates::favicon_svg(),
+        "public, max-age=31536000, immutable",
     )
 }
 
-async fn og_image() -> impl IntoResponse {
-    svg(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630"><rect width="1200" height="630" fill="#09100c"/><circle cx="940" cy="120" r="280" fill="#80e36a" opacity=".14"/><text x="72" y="160" fill="#80e36a" font-family="Atkinson Hyperlegible,Arial,sans-serif" font-size="34" letter-spacing="8">HEYTEA.DEV</text><text x="72" y="315" fill="#f3faef" font-family="Atkinson Hyperlegible,Arial,sans-serif" font-size="96" font-weight="700">Downtown Metreon</text><text x="72" y="430" fill="#f3faef" font-family="Atkinson Hyperlegible,Arial,sans-serif" font-size="96" font-weight="700">wait time</text><text x="76" y="520" fill="#a7b49e" font-family="Atkinson Hyperlegible,Arial,sans-serif" font-size="38">Live status for 165 4th St, San Francisco</text></svg>"##,
-    )
+async fn og_image(State(state): State<AppState>) -> impl IntoResponse {
+    let (status, history) = tokio::join!(
+        api_json::<StatusResponse>(&state, "/status"),
+        api_json::<HistoryResponse>(&state, "/history?range=today")
+    );
+    let view = templates::DashboardView::new(
+        status.as_ref(),
+        history.as_ref(),
+        "downtown metreon",
+        "America/Los_Angeles",
+    );
+    svg_owned(og_svg(&view), "public, max-age=30, must-revalidate")
 }
 
 async fn security_txt() -> impl IntoResponse {
@@ -159,8 +220,8 @@ async fn ai_plugin() -> impl IntoResponse {
             "schema_version": "v1",
             "name_for_human": "heytea.dev",
             "name_for_model": "heytea_dev",
-            "description_for_human": "Live wait time and status for HeyTea Downtown Metreon.",
-            "description_for_model": "Query current wait time, notices, and historical wait-time data for HeyTea Downtown Metreon.",
+            "description_for_human": "Live wait time and status for HeyTea locations.",
+            "description_for_model": "Query current wait time, notices, locations, and historical wait-time data for HeyTea.",
             "auth": { "type": "none" },
             "api": { "type": "openapi", "url": "https://api.heytea.dev/openapi.json" },
             "logo_url": "https://heytea.dev/icon.svg",
@@ -176,14 +237,14 @@ async fn agent_json() -> impl IntoResponse {
         Json(json!({
             "name": "heytea.dev",
             "url": "https://heytea.dev/",
-            "description": "Live wait-time status tools for HeyTea Downtown Metreon.",
+            "description": "Live wait-time status tools for HeyTea locations.",
             "version": "0.1.0",
             "capabilities": { "streaming": true, "pushNotifications": false },
             "skills": [
                 {
                     "id": "get_status",
                     "name": "Get current status",
-                    "description": "Fetch live wait time, open state, notices, and freshness metadata."
+                    "description": "Fetch live wait time, catalog open state, notices, and freshness metadata."
                 }
             ]
         })),
@@ -195,7 +256,7 @@ async fn mcp_json() -> impl IntoResponse {
         static_headers(),
         Json(json!({
             "name": "heytea.dev",
-            "description": "Public anonymous MCP server for the singleton HeyTea Downtown Metreon status API.",
+            "description": "Public anonymous MCP server for HeyTea location status APIs.",
             "url": "https://mcp.heytea.dev/mcp",
             "transport": "http",
             "auth": { "type": "none" }
@@ -209,11 +270,11 @@ async fn webmcp_json() -> impl IntoResponse {
         Json(json!({
             "name": "heytea.dev",
             "version": "0.1.0",
-            "description": "Browser-accessible live status tools for HeyTea Downtown Metreon.",
+            "description": "Browser-accessible live status tools for HeyTea locations.",
             "tools": [
                 {
                     "name": "get_status",
-                    "description": "Get current wait time, open state, notices, and freshness metadata.",
+                    "description": "Get current wait time, catalog open state, notices, and freshness metadata.",
                     "inputSchema": { "type": "object", "properties": {} }
                 }
             ]
@@ -258,23 +319,149 @@ where
     let url = format!("{}{}", state.api_url.trim_end_matches('/'), path);
     match state.client.get(url).send().await {
         Ok(response) => {
-            let ok = response.status().is_success();
-            let value = response.json::<T>().await.ok();
-            ApiCheck { ok, value }
+            let value = if response.status().is_success() {
+                response.json::<T>().await.ok()
+            } else {
+                None
+            };
+            ApiCheck { value }
         }
         Err(error) => {
             tracing::warn!(?error, path, "site api fetch failed");
-            ApiCheck {
-                ok: false,
-                value: None,
-            }
+            ApiCheck { value: None }
         }
     }
 }
 
 pub struct ApiCheck<T> {
-    pub ok: bool,
     pub value: Option<T>,
+}
+
+type ProbeValues = HashMap<String, f64>;
+
+#[derive(Debug, Deserialize)]
+struct PrometheusResponse {
+    status: String,
+    data: PrometheusData,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrometheusData {
+    result: Vec<PrometheusResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrometheusResult {
+    metric: HashMap<String, String>,
+    value: (f64, String),
+}
+
+async fn prometheus_query(state: &AppState, query: &str) -> ProbeValues {
+    let url = format!(
+        "{}/api/v1/query",
+        state.prometheus_url.trim_end_matches('/')
+    );
+    let response = match state
+        .client
+        .get(url)
+        .query(&[("query", query)])
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(?error, query, "prometheus query failed");
+            return HashMap::new();
+        }
+    };
+    let body = match response.json::<PrometheusResponse>().await {
+        Ok(body) if body.status == "success" => body,
+        Ok(body) => {
+            tracing::warn!(status = %body.status, query, "prometheus query returned non-success");
+            return HashMap::new();
+        }
+        Err(error) => {
+            tracing::warn!(?error, query, "prometheus response decode failed");
+            return HashMap::new();
+        }
+    };
+    body.data
+        .result
+        .into_iter()
+        .filter_map(|result| {
+            let target = result.metric.get("instance")?.to_string();
+            let value = result.value.1.parse::<f64>().ok()?;
+            Some((target, value))
+        })
+        .collect()
+}
+
+fn status_components(
+    success: ProbeValues,
+    uptime: ProbeValues,
+    latency: ProbeValues,
+) -> Vec<templates::StatusComponent> {
+    let mut targets = BTreeSet::new();
+    targets.extend(success.keys().cloned());
+    targets.extend(uptime.keys().cloned());
+    targets.extend(latency.keys().cloned());
+
+    let preferred = [
+        "https://heytea.dev",
+        "https://api.heytea.dev/healthz",
+        "https://api.heytea.dev/readyz",
+        "https://docs.heytea.dev",
+        "https://mcp.heytea.dev",
+        "https://status.heytea.dev",
+    ];
+    let mut ordered = Vec::new();
+    for target in preferred {
+        if targets.remove(target) {
+            ordered.push(target.to_string());
+        }
+    }
+    ordered.extend(targets);
+
+    ordered
+        .into_iter()
+        .map(|target| {
+            let up = success.get(&target).copied();
+            let ok = up.map(|value| value >= 1.0).unwrap_or(false);
+            templates::StatusComponent {
+                name: component_name(&target).to_string(),
+                target: target.clone(),
+                state: if ok {
+                    "Operational"
+                } else if up.is_some() {
+                    "Degraded"
+                } else {
+                    "Unknown"
+                }
+                .to_string(),
+                class_name: if ok { "ok" } else { "bad" }.to_string(),
+                uptime: uptime
+                    .get(&target)
+                    .map(|value| format!("{value:.2}%"))
+                    .unwrap_or_else(|| "unknown".to_string()),
+                latency: latency
+                    .get(&target)
+                    .map(|value| format!("{value:.0} ms"))
+                    .unwrap_or_else(|| "unknown".to_string()),
+            }
+        })
+        .collect()
+}
+
+fn component_name(target: &str) -> &str {
+    match target {
+        "https://heytea.dev" => "Website",
+        "https://api.heytea.dev/healthz" => "API health",
+        "https://api.heytea.dev/readyz" => "API readiness",
+        "https://docs.heytea.dev" => "Docs",
+        "https://mcp.heytea.dev" => "MCP",
+        "https://status.heytea.dev" => "Status page",
+        _ => target,
+    }
 }
 
 fn text(body: &'static str) -> impl IntoResponse {
@@ -298,14 +485,41 @@ fn xml(body: &'static str) -> impl IntoResponse {
     )
 }
 
-fn svg(body: &'static str) -> impl IntoResponse {
+fn svg_owned(body: String, cache_control: &str) -> impl IntoResponse {
     (
-        typed_headers(
-            "image/svg+xml; charset=utf-8",
-            "public, max-age=31536000, immutable",
-        ),
+        typed_headers("image/svg+xml; charset=utf-8", cache_control),
         body,
     )
+}
+
+fn og_svg(view: &templates::DashboardView) -> String {
+    let status_line = escape_xml(&view.status_line);
+    let graph = if view.closed {
+        String::new()
+    } else {
+        format!(
+            r##"<rect x="72" y="320" width="1056" height="220" fill="#fff" stroke="#000" stroke-width="4"/><g transform="translate(72 320) scale(10.56 5)"><polyline points="{}" fill="none" stroke="#000" stroke-width="4" stroke-linecap="square" stroke-linejoin="miter" vector-effect="non-scaling-stroke"/></g>"##,
+            escape_xml(&view.trend_points)
+        )
+    };
+
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630"><rect width="1200" height="630" fill="#fff"/><text x="72" y="118" fill="#000" font-family="Atkinson Hyperlegible,Arial,sans-serif" font-size="48">heytea.dev</text><text x="72" y="240" fill="#000" font-family="Atkinson Hyperlegible,Arial,sans-serif" font-size="72">{status_line}</text>{graph}</svg>"##
+    )
+}
+
+fn escape_xml(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|ch| match ch {
+            '&' => "&amp;".chars().collect::<Vec<_>>(),
+            '<' => "&lt;".chars().collect::<Vec<_>>(),
+            '>' => "&gt;".chars().collect::<Vec<_>>(),
+            '"' => "&quot;".chars().collect::<Vec<_>>(),
+            '\'' => "&apos;".chars().collect::<Vec<_>>(),
+            _ => vec![ch],
+        })
+        .collect()
 }
 
 async fn not_found(headers: HeaderMap) -> Response {
@@ -367,11 +581,33 @@ fn agent_user_agent(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
-fn html_shell_headers() -> HeaderMap {
-    typed_headers(
+fn html_shell_headers(stream_url: &str) -> HeaderMap {
+    let mut headers = typed_headers(
         "text/html; charset=utf-8",
         "public, max-age=30, must-revalidate",
-    )
+    );
+    let csp = format!(
+        "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:; img-src data:; connect-src {}",
+        csp_origin(stream_url)
+    );
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_str(&csp).expect("valid content security policy"),
+    );
+    headers
+}
+
+fn csp_origin(url: &str) -> String {
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return "'self'".to_string();
+    };
+    let Some(host) = url.host_str() else {
+        return "'self'".to_string();
+    };
+    match url.port() {
+        Some(port) => format!("{}://{}:{}", url.scheme(), host, port),
+        None => format!("{}://{}", url.scheme(), host),
+    }
 }
 
 fn static_headers() -> HeaderMap {
@@ -418,51 +654,53 @@ fn site_error(status: StatusCode, message: &'static str) -> Response {
 
 const LLMS_TXT: &str = r#"# heytea.dev
 
-> Live wait time, open state, notices, and history for the singleton HeyTea Downtown Metreon location at 165 4th St, San Francisco.
+> Live wait time, catalog open state, notices, history, and location discovery for public HeyTea locations.
 
 ## Endpoints
 
-- `GET https://api.heytea.dev/status` - Current store state, wait time, notices, observed time, and staleAfter freshness.
-- `GET https://api.heytea.dev/wait-time` - Current pickup, delivery, cups, and orders values.
-- `GET https://api.heytea.dev/notice` - Current store notice.
-- `GET https://api.heytea.dev/closing-notice` - Current closing notice.
-- `GET https://api.heytea.dev/history?range=today` - One-minute points for the current same-day open session.
-- `GET https://api.heytea.dev/stream` - Server-sent `status.updated` events.
+- `GET https://api.heytea.dev/locations` - Public locations with catalog open state and current pickup wait.
+- `GET https://api.heytea.dev/locations/{slug}/status` - Current store state, wait time, notices, observed time, and staleAfter freshness.
+- `GET https://api.heytea.dev/locations/{slug}/wait-time` - Current pickup, delivery, cups, and orders values.
+- `GET https://api.heytea.dev/locations/{slug}/notice` - Current store notices.
+- `GET https://api.heytea.dev/locations/{slug}/closing-notice` - Current closing notices.
+- `GET https://api.heytea.dev/locations/{slug}/history?range=today` - One-minute points for the current same-day open session.
+- `GET https://api.heytea.dev/locations/{slug}/stream` - Server-sent `status.updated` events.
 - `GET https://api.heytea.dev/openapi.json` - OpenAPI schema.
 - `POST https://mcp.heytea.dev/mcp` - JSON-RPC 2.0 MCP endpoint.
 
 ## Authentication
 
-No authentication is required. The API is singleton-shaped: no shop IDs, no location endpoints, no menu endpoints, and no `/v1` prefix.
+No authentication is required. The API exposes public slugs, not upstream shop IDs. There are no menu endpoints and no `/v1` prefix.
 
 ## Freshness
 
-Data is polled every 60 seconds. Treat live data as fresh until `staleAfter`. HTTP `max-age` is based on `max(0, observedAt + pollInterval - now)`.
+Waits and notices are polled every 60 seconds. Catalog metadata, including open state, refreshes more slowly. Treat live wait data as fresh until `staleAfter`. HTTP `max-age` is based on `max(0, observedAt + pollInterval - now)`.
 
 ## Examples
 
 ```bash
-curl https://api.heytea.dev/status
-curl 'https://api.heytea.dev/history?range=today'
-curl -N https://api.heytea.dev/stream
+curl https://api.heytea.dev/locations
+curl https://api.heytea.dev/locations/downtown-metreon/status
+curl 'https://api.heytea.dev/locations/downtown-metreon/history?range=today'
+curl -N https://api.heytea.dev/locations/downtown-metreon/stream
 ```
 
 ```bash
 curl https://mcp.heytea.dev/mcp \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_status","arguments":{}}}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_status","arguments":{"slug":"downtown-metreon"}}}'
 ```
 "#;
 
 const LLMS_FULL_TXT: &str = r#"# heytea.dev Full Context
 
-heytea.dev is a live singleton status dashboard and public API for HeyTea Downtown Metreon at 165 4th St, San Francisco.
+heytea.dev is a live status dashboard and public API for public HeyTea locations.
 
-The service polls safe public HeyTea app endpoints every 60 seconds, stores normalized observations in Postgres/TimescaleDB, and publishes live updates to connected browsers with Server-Sent Events. The public API never accepts or returns upstream shop IDs.
+The service discovers locations, polls safe public HeyTea app endpoints every 60 seconds, stores normalized observations in Postgres/TimescaleDB, and publishes live updates to connected browsers with Server-Sent Events. The public API never accepts or returns upstream shop IDs.
 
 Public surfaces:
 
-- Dashboard: https://heytea.dev/
+- Location finder: https://heytea.dev/
 - API: https://api.heytea.dev
 - Docs: https://docs.heytea.dev
 - MCP: https://mcp.heytea.dev/mcp
@@ -470,12 +708,14 @@ Public surfaces:
 
 API endpoints:
 
-- `GET /status`
-- `GET /wait-time`
-- `GET /notice`
-- `GET /closing-notice`
-- `GET /history?range=today|1h|6h|24h|7d|30d|1y`
-- `GET /stream`
+- `GET /locations`
+- `GET /locations/{slug}`
+- `GET /locations/{slug}/status`
+- `GET /locations/{slug}/wait-time`
+- `GET /locations/{slug}/notice`
+- `GET /locations/{slug}/closing-notice`
+- `GET /locations/{slug}/history?range=today|1h|6h|24h|7d`
+- `GET /locations/{slug}/stream`
 - `GET /healthz`
 - `GET /readyz`
 - `GET /metrics`
@@ -483,6 +723,8 @@ API endpoints:
 
 MCP tools:
 
+- `list_locations`
+- `find_nearest_location`
 - `get_status`
 - `get_wait_time`
 - `get_notice`
@@ -495,8 +737,7 @@ Live values include `observedAt`, `stale`, and `staleAfter` when applicable. Dat
 
 Restrictions:
 
-- No public store IDs.
-- No public shop list or location search.
+- No public upstream store IDs.
 - No menu endpoints.
 - No payment, authentication bypass, attestation bypass, or rate-limit bypass.
 "#;
@@ -510,12 +751,12 @@ Agents should use `staleAfter` and cache headers to avoid unnecessary refetches.
 
 const SKILL_MD: &str = r#"---
 name: heytea-status
-description: Query live wait time, open state, notices, and recent wait-time history for HeyTea Downtown Metreon.
+description: Query live wait time, catalog open state, notices, locations, and recent wait-time history for HeyTea.
 ---
 
 # heytea-status
 
-Use this skill when a user asks about the current status or wait time for HeyTea Downtown Metreon in San Francisco.
+Use this skill when a user asks about the current status or wait time for HeyTea locations.
 
-Call `GET https://api.heytea.dev/status` for the current state. Use `GET https://api.heytea.dev/history?range=today` for the current open-session trend. Use the MCP `get_status` or `get_history` tools when MCP is available.
+Call `GET https://api.heytea.dev/locations` to discover slugs. Use `GET https://api.heytea.dev/locations/{slug}/status` for current state and `GET https://api.heytea.dev/locations/{slug}/history?range=today` for the current-day trend. Use the MCP `list_locations`, `get_status`, or `get_history` tools when MCP is available.
 "#;

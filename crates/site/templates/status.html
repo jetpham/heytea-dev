@@ -1,1 +1,46 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="30"><title>heytea.dev status</title><meta name="description" content="Service and data freshness status for heytea.dev."><meta name="theme-color" content="#101510"><link rel="canonical" href="https://status.heytea.dev/"><link rel="preload" href="/a.woff2" as="font" type="font/woff2" crossorigin><link rel="icon" href="/icon.svg" type="image/svg+xml">{% for href in assets.css %}<link rel="stylesheet" href="{{ href }}">{% endfor %}</head><body><main><p class="{% if operational %}ok{% else %}bad{% endif %}">{{ summary }}</p><h1>heytea.dev status</h1><section><dl><div><dt>Database</dt><dd>{{ database }}</dd></div><div><dt>Data freshness</dt><dd>{{ freshness }}</dd></div><div><dt>Store open</dt><dd>{{ store_open }}</dd></div><div><dt>Pickup wait</dt><dd class="n">{{ pickup_wait }}</dd></div><div><dt>Checked</dt><dd class="n">{{ checked }}</dd></div></dl></section></main>{% for src in assets.scripts %}<script type="module" src="{{ src }}"></script>{% endfor %}</body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="refresh" content="30">
+  <title>heytea.dev status</title>
+  <meta name="description" content="Current public service status for heytea.dev.">
+  <meta name="theme-color" content="#ffffff">
+  <link rel="canonical" href="https://status.heytea.dev/">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  {% for href in assets.css %}<link rel="stylesheet" href="{{ href }}">{% endfor %}
+</head>
+<body>
+  <main>
+    <section class="summary {{ summary_class }}" aria-labelledby="summary-title">
+      <div>
+        <p>Current status</p>
+        <h1 id="summary-title">{{ summary }}</h1>
+      </div>
+      <p class="checked">Checked {{ checked }}</p>
+    </section>
+
+    <section class="components" aria-labelledby="components-title">
+      <h2 id="components-title">Services</h2>
+      {% if components.len() == 0 %}
+        <p class="empty">Blackbox probe data is not available.</p>
+      {% endif %}
+      {% for component in components %}
+        <article class="component">
+          <div>
+            <h3><span class="dot {{ component.class_name }}" aria-hidden="true"></span>{{ component.name }}</h3>
+            <p>{{ component.target }}</p>
+          </div>
+          <dl>
+            <div><dt>Status</dt><dd class="{{ component.class_name }}">{{ component.state }}</dd></div>
+            <div><dt>24h uptime</dt><dd>{{ component.uptime }}</dd></div>
+            <div><dt>Latency</dt><dd>{{ component.latency }}</dd></div>
+          </dl>
+        </article>
+      {% endfor %}
+    </section>
+  </main>
+  {% for src in assets.scripts %}<script type="module" src="{{ src }}"></script>{% endfor %}
+</body>
+</html>

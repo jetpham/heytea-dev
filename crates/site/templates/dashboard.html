@@ -3,74 +3,44 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>heytea.dev</title>
-  <meta name="description" content="Live wait time for HeyTea Downtown Metreon.">
+  <title>heytea {{ location_name }}</title>
+  <meta name="description" content="Live wait time for heytea {{ location_name }}.">
   <meta name="theme-color" content="#ffffff">
-  <link rel="canonical" href="https://heytea.dev/">
+  <meta property="og:title" content="heytea.dev">
+  <meta property="og:description" content="{{ status_line }}">
+  <meta property="og:image" content="https://heytea.dev/og.svg">
+  <meta property="og:image:type" content="image/svg+xml">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="heytea.dev">
+  <meta name="twitter:description" content="{{ status_line }}">
+  <meta name="twitter:image" content="https://heytea.dev/og.svg">
+  <link rel="canonical" href="{{ canonical_url }}">
   <link rel="icon" href="{{ favicon_href }}" type="image/svg+xml">
   <link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt">
   <style>{{ inline_css|safe }}</style>
 </head>
 <body>
-  <main id="app" data-stream-url="{{ stream_url }}">
-    <table class="header" aria-label="Page header">
-      <tr>
-        <th>APP</th>
-        <td>heytea.dev</td>
-        <th>MODE</th>
-        <td>live</td>
-      </tr>
-      <tr>
-        <th>STORE</th>
-        <td>Downtown Metreon</td>
-        <th>SIGNAL</th>
-        <td>pickup</td>
-      </tr>
-    </table>
-
-    <section aria-labelledby="current-title">
-      <p id="current-title" class="label">CURRENT</p>
-      <table aria-label="Current pickup status">
-        <tr>
-          <th>Pickup</th>
-          <td id="w">{{ pickup_wait }}</td>
-        </tr>
-        <tr>
-          <th>Cups</th>
-          <td id="c">{{ making_cups }}</td>
-        </tr>
-        <tr>
-          <th>Orders</th>
-          <td id="o">{{ making_orders }}</td>
-        </tr>
-      </table>
-    </section>
-
-    <section aria-labelledby="store-title">
-      <p id="store-title" class="label">STORE</p>
-      <table aria-label="Store status">
-        <tr>
-          <th>Observed</th>
-          <td id="obs">{{ observed }}</td>
-        </tr>
-        <tr>
-          <th>Open</th>
-          <td id="open">{{ open }}</td>
-        </tr>
-        <tr>
-          <th>Closing</th>
-          <td id="closing">{{ closing_notice }}</td>
-        </tr>
-      </table>
-    </section>
-
-    <section aria-labelledby="history-title">
-      <p id="history-title" class="label">PICKUP HISTORY</p>
-      <svg class="sparkline" viewBox="0 0 100 40" preserveAspectRatio="none" aria-label="Pickup wait trend" role="img">
-        <polyline id="trend" data-v="{{ trend_data }}" data-m="{{ trend_minute }}" points="{{ trend_points }}"></polyline>
-      </svg>
-    </section>
+  <nav aria-label="main">
+    <span id="nav-status">{{ nav_status }}</span>
+    <span class="links">
+      <a href="https://docs.heytea.dev/">docs</a>
+      <a href="https://status.heytea.dev/">status</a>
+      <a href="https://crates.io/crates/heytea">crate</a>
+      <a href="https://mcp.heytea.dev/mcp">mcp</a>
+    </span>
+  </nav>
+  <main id="app" data-stream-url="{{ stream_url }}" data-location-name="{{ location_name }}" data-timezone="{{ timezone }}" data-open="{{ open }}" data-wait="{{ wait_minutes }}" data-observed-at="{{ observed_at }}">
+    <p id="status" aria-live="polite">{{ status_line }}</p>
+    <svg id="graph" viewBox="0 0 100 40" preserveAspectRatio="none" aria-label="pickup wait history" role="img"{% if closed %} hidden{% endif %}>
+      <polyline id="trend" data-v="{{ trend_data }}" data-m="{{ trend_minute }}" points="{{ trend_points }}"></polyline>
+    </svg>
   </main>
+  <footer>
+    <span>made by <a href="https://jetpham.com">jet</a></span>
+    <a href="https://github.com/jetpham/heytea-dev">source code</a>
+  </footer>
   <script>{{ inline_js|safe }}</script>
 </body>
 </html>

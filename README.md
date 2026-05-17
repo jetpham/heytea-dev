@@ -1,8 +1,8 @@
 # heytea.dev
 
-Live wait-time and status dashboard for the HeyTea Downtown Metreon location.
+Live wait-time and status dashboard for public HeyTea locations.
 
-This project intentionally models a single configured store. The public API never accepts or returns an upstream shop ID; the configured upstream ID lives in `config/shop-id` and is only used by the poller.
+The public API uses stable location slugs and never accepts or returns upstream shop IDs. Legacy singleton endpoints remain as aliases for `downtown-metreon`.
 
 Live values are considered fresh until the next expected poll: `ttl_seconds = max(0, observed_at + poll_interval - now)`. Poller commits normalized data to Postgres, sends a Postgres notification, and the API broadcasts `status.updated` to connected SSE clients.
 
@@ -31,12 +31,20 @@ Base URL: `https://api.heytea.dev`
 - `GET /closing-notice`
 - `GET /history?range=today`
 - `GET /stream`
+- `GET /locations`
+- `GET /locations/{slug}`
+- `GET /locations/{slug}/status`
+- `GET /locations/{slug}/wait-time`
+- `GET /locations/{slug}/notice`
+- `GET /locations/{slug}/closing-notice`
+- `GET /locations/{slug}/history?range=today`
+- `GET /locations/{slug}/stream`
 - `GET /healthz`
 - `GET /readyz`
 - `GET /metrics`
 - `GET /openapi.json`
 
-No `/v1`, no store-listing endpoints, no location endpoints, and no menu endpoints.
+No `/v1`, no upstream shop IDs, and no menu endpoints.
 
 ## Local Development
 

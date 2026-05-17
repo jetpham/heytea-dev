@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>heytea locations</title>
+  <meta name="description" content="Find the closest heytea location and current pickup wait.">
+  <meta name="theme-color" content="#ffffff">
+  <link rel="canonical" href="https://heytea.dev/">
+  <link rel="icon" href="{{ favicon_href }}" type="image/svg+xml">
+  <link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt">
+  <style>{{ inline_css|safe }}</style>
+</head>
+<body>
+  <nav aria-label="main">
+    <span>heytea locations</span>
+    <span class="links">
+      <a href="https://docs.heytea.dev/">docs</a>
+      <a href="https://status.heytea.dev/">status</a>
+      <a href="https://crates.io/crates/heytea">crate</a>
+      <a href="https://mcp.heytea.dev/mcp">mcp</a>
+    </span>
+  </nav>
+  <main id="finder">
+    <p>find a heytea near you</p>
+    <label for="q">search</label>
+    <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="city or location">
+    <button id="near" type="button">use my location</button>
+    <ol id="locations"></ol>
+  </main>
+  <footer>
+    <span>made by <a href="https://jetpham.com">jet</a></span>
+    <a href="https://github.com/jetpham/heytea-dev">source code</a>
+  </footer>
+  <script id="locations-data" type="application/json">{{ locations_json|safe }}</script>
+  <script>{{ inline_js|safe }}</script>
+</body>
+</html>

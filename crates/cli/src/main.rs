@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "heytea", about = "Query the heytea.dev singleton API")]
+#[command(name = "heytea", about = "Query the heytea.dev API")]
 struct Args {
     #[arg(long, env = "HEYTEA_API_URL", default_value = "https://api.heytea.dev")]
     api_url: String,
@@ -11,11 +11,30 @@ struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    Status,
-    WaitTime,
-    Notice,
-    ClosingNotice,
+    Locations,
+    Location {
+        #[arg(default_value = "downtown-metreon")]
+        slug: String,
+    },
+    Status {
+        #[arg(default_value = "downtown-metreon")]
+        slug: String,
+    },
+    WaitTime {
+        #[arg(default_value = "downtown-metreon")]
+        slug: String,
+    },
+    Notice {
+        #[arg(default_value = "downtown-metreon")]
+        slug: String,
+    },
+    ClosingNotice {
+        #[arg(default_value = "downtown-metreon")]
+        slug: String,
+    },
     History {
+        #[arg(default_value = "downtown-metreon")]
+        slug: String,
         #[arg(long, default_value = "24h")]
         range: String,
     },
@@ -27,11 +46,19 @@ async fn main() -> anyhow::Result<()> {
     let client = heytea::Client::new(&args.api_url)?;
 
     let value = match args.command {
-        Command::Status => serde_json::to_value(client.status().await?)?,
-        Command::WaitTime => serde_json::to_value(client.wait_time().await?)?,
-        Command::Notice => serde_json::to_value(client.notice().await?)?,
-        Command::ClosingNotice => serde_json::to_value(client.closing_notice().await?)?,
-        Command::History { range } => serde_json::to_value(client.history(&range).await?)?,
+        Command::Locations => serde_json::to_value(client.locations().await?)?,
+        Command::Location { slug } => serde_json::to_value(client.location(&slug).await?)?,
+        Command::Status { slug } => serde_json::to_value(client.status_for_location(&slug).await?)?,
+        Command::WaitTime { slug } => {
+            serde_json::to_value(client.wait_time_for_location(&slug).await?)?
+        }
+        Command::Notice { slug } => serde_json::to_value(client.notice_for_location(&slug).await?)?,
+        Command::ClosingNotice { slug } => {
+            serde_json::to_value(client.closing_notice_for_location(&slug).await?)?
+        }
+        Command::History { slug, range } => {
+            serde_json::to_value(client.history_for_location(&slug, &range).await?)?
+        }
     };
 
     println!("{}", serde_json::to_string_pretty(&value)?);

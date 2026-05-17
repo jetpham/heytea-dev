@@ -859,8 +859,8 @@ name = "heytea"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "futures",
- "heytea-core",
  "reqwest",
  "serde",
  "tokio-stream",
@@ -930,6 +930,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "futures",
  "heytea-core",
  "reqwest",
  "serde",

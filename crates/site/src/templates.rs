@@ -1,41 +1,39 @@
-use crate::{assets::AssetTags, routes::ApiCheck};
+use crate::assets::AssetTags;
 use askama::Template;
 use chrono::{DateTime, Utc};
 use chrono_tz::America::Los_Angeles;
-use heytea_core::{HistoryResponse, ReadyResponse, StatusResponse};
+use chrono_tz::Tz;
+use heytea_core::{HistoryResponse, LocationResponse, LocationsResponse, StatusResponse};
 use std::fmt::Write as _;
 
 const DASHBOARD_CSS: &str = include_str!("../templates/dashboard.css");
 const DASHBOARD_JS: &str = include_str!("../templates/dashboard.js");
-const DASHBOARD_FONT_B64: &str = include_str!("../templates/atkinson-ascii.woff2.b64");
+const FINDER_JS: &str = include_str!("../templates/finder.js");
+const DASHBOARD_FONT_B64: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/dashboard-font.woff2.b64"));
 const FAVICON_SVG: &str = include_str!("../templates/heyteafavi.svg");
 
-#[derive(Template)]
-#[template(path = "dashboard.html")]
-pub struct DashboardTemplate {
-    pub stream_url: String,
-    pub favicon_href: String,
-    pub inline_css: String,
-    pub inline_js: &'static str,
-    pub pickup_wait: String,
-    pub making_cups: String,
-    pub making_orders: String,
-    pub observed: String,
-    pub open: String,
-    pub closing_notice: String,
-    pub trend_points: String,
-    pub trend_data: String,
-    pub trend_minute: i64,
+#[derive(Debug, Clone)]
+pub(crate) struct DashboardView {
+    pub(crate) closed: bool,
+    pub(crate) open: bool,
+    pub(crate) nav_status: String,
+    pub(crate) status_line: String,
+    pub(crate) wait_minutes: i32,
+    pub(crate) observed_at: String,
+    pub(crate) trend_points: String,
+    pub(crate) trend_data: String,
+    pub(crate) trend_minute: i64,
 }
 
-impl DashboardTemplate {
-    pub fn new(
-        status: Option<StatusResponse>,
-        history: Option<HistoryResponse>,
-        stream_url: String,
+impl DashboardView {
+    pub(crate) fn new(
+        status: Option<&StatusResponse>,
+        history: Option<&HistoryResponse>,
+        location_name: &str,
+        timezone: &str,
     ) -> Self {
         let values = history
-            .as_ref()
             .map(|history| {
                 history
                     .points
@@ -66,41 +64,37 @@ impl DashboardTemplate {
             .collect::<Vec<_>>()
             .join(",");
         let trend_minute = status
-            .as_ref()
             .map(|status| status.observed_at.timestamp() / 60)
             .unwrap_or_default();
+        let closed = status.and_then(|status| status.is_open) != Some(true);
+        let open = !closed;
+        let nav_status = format!("heytea is {}", if closed { "closed" } else { "open" });
+        let wait_minutes = status
+            .and_then(|status| status.pickup_wait_minutes)
+            .unwrap_or_default();
+        let observed_at = status
+            .map(|status| status.observed_at.to_rfc3339())
+            .unwrap_or_default();
+        let status_line = if closed {
+            "closed".to_string()
+        } else {
+            let status = status.expect("open status exists");
+            format!(
+                "the wait time at heytea {} is {} as of {}, which was {}",
+                location_name.to_ascii_lowercase(),
+                minute_words(wait_minutes),
+                compact_time(status.observed_at, timezone),
+                age_words(status.observed_at)
+            )
+        };
 
         Self {
-            stream_url,
-            favicon_href: svg_data_uri(FAVICON_SVG),
-            inline_css: format!(
-                "@font-face{{font-family:a;src:url(data:font/woff2;base64,{}) format('woff2');font-display:block}}{}",
-                DASHBOARD_FONT_B64.trim(),
-                DASHBOARD_CSS
-            ),
-            inline_js: DASHBOARD_JS,
-            pickup_wait: minutes(
-                status
-                    .as_ref()
-                    .and_then(|status| status.pickup_wait_minutes),
-            ),
-            making_cups: count(status.as_ref().and_then(|status| status.making_cups)),
-            making_orders: count(status.as_ref().and_then(|status| status.making_orders)),
-            observed: status
-                .as_ref()
-                .map(|status| time(status.observed_at))
-                .unwrap_or_else(|| "after first poll".to_string()),
-            open: match status.as_ref().and_then(|status| status.is_open) {
-                Some(true) => "yes".to_string(),
-                Some(false) => "no".to_string(),
-                None => "unknown".to_string(),
-            },
-            closing_notice: clip(
-                status
-                    .as_ref()
-                    .and_then(|status| status.closing_notice.as_deref()),
-                "No active closing notice",
-            ),
+            closed,
+            open,
+            nav_status,
+            status_line,
+            wait_minutes,
+            observed_at,
             trend_points,
             trend_data,
             trend_minute,
@@ -109,73 +103,105 @@ impl DashboardTemplate {
 }
 
 #[derive(Template)]
+#[template(path = "dashboard.html")]
+pub struct DashboardTemplate {
+    pub stream_url: String,
+    pub canonical_url: String,
+    pub location_name: String,
+    pub timezone: String,
+    pub favicon_href: String,
+    pub inline_css: String,
+    pub inline_js: &'static str,
+    pub closed: bool,
+    pub open: bool,
+    pub nav_status: String,
+    pub status_line: String,
+    pub wait_minutes: i32,
+    pub observed_at: String,
+    pub trend_points: String,
+    pub trend_data: String,
+    pub trend_minute: i64,
+}
+
+impl DashboardTemplate {
+    pub fn new(
+        status: Option<StatusResponse>,
+        history: Option<HistoryResponse>,
+        stream_url: String,
+        location: LocationResponse,
+    ) -> Self {
+        let view = DashboardView::new(
+            status.as_ref(),
+            history.as_ref(),
+            &location.name,
+            &location.timezone,
+        );
+
+        Self {
+            stream_url,
+            canonical_url: format!("https://heytea.dev/{}", location.slug),
+            location_name: location.name.to_ascii_lowercase(),
+            timezone: location.timezone,
+            favicon_href: svg_data_uri(&favicon_svg()),
+            inline_css: dashboard_css(),
+            inline_js: DASHBOARD_JS,
+            closed: view.closed,
+            open: view.open,
+            nav_status: view.nav_status,
+            status_line: view.status_line,
+            wait_minutes: view.wait_minutes,
+            observed_at: view.observed_at,
+            trend_points: view.trend_points,
+            trend_data: view.trend_data,
+            trend_minute: view.trend_minute,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "finder.html")]
+pub struct FinderTemplate {
+    pub favicon_href: String,
+    pub inline_css: String,
+    pub inline_js: &'static str,
+    pub locations_json: String,
+}
+
+impl FinderTemplate {
+    pub fn new(locations: Option<LocationsResponse>) -> Self {
+        Self {
+            favicon_href: svg_data_uri(&favicon_svg()),
+            inline_css: dashboard_css(),
+            inline_js: FINDER_JS,
+            locations_json: safe_json(&locations.unwrap_or_else(|| LocationsResponse {
+                generated_at: Utc::now(),
+                locations: Vec::new(),
+            })),
+        }
+    }
+}
+
+pub(crate) fn favicon_svg() -> String {
+    with_white_background(FAVICON_SVG)
+}
+
+#[derive(Template)]
 #[template(path = "status.html")]
 pub struct StatusTemplate {
     pub assets: AssetTags,
-    pub operational: bool,
     pub summary: String,
-    pub database: String,
-    pub freshness: String,
-    pub store_open: String,
-    pub pickup_wait: String,
+    pub summary_class: String,
     pub checked: String,
+    pub components: Vec<StatusComponent>,
 }
 
-impl StatusTemplate {
-    pub fn new(
-        ready: ApiCheck<ReadyResponse>,
-        status: ApiCheck<StatusResponse>,
-        assets: AssetTags,
-    ) -> Self {
-        let fresh = status.ok
-            && status
-                .value
-                .as_ref()
-                .map(|status| !status.stale)
-                .unwrap_or(false);
-        let operational =
-            ready.ok && ready.value.as_ref().map(|ready| ready.ok).unwrap_or(false) && fresh;
-
-        Self {
-            assets,
-            operational,
-            summary: if operational {
-                "Operational"
-            } else {
-                "Degraded"
-            }
-            .to_string(),
-            database: if ready
-                .value
-                .as_ref()
-                .map(|ready| ready.database)
-                .unwrap_or(false)
-            {
-                "ready"
-            } else {
-                "not ready"
-            }
-            .to_string(),
-            freshness: if fresh {
-                "fresh"
-            } else {
-                "stale or unavailable"
-            }
-            .to_string(),
-            store_open: match status.value.as_ref().and_then(|status| status.is_open) {
-                Some(true) => "yes".to_string(),
-                Some(false) => "no".to_string(),
-                None => "unknown".to_string(),
-            },
-            pickup_wait: minutes(
-                status
-                    .value
-                    .as_ref()
-                    .and_then(|status| status.pickup_wait_minutes),
-            ),
-            checked: time(Utc::now()),
-        }
-    }
+pub struct StatusComponent {
+    pub name: String,
+    pub target: String,
+    pub state: String,
+    pub class_name: String,
+    pub uptime: String,
+    pub latency: String,
 }
 
 #[derive(Template)]
@@ -184,39 +210,50 @@ pub struct DocsTemplate {
     pub assets: AssetTags,
 }
 
-fn minutes(value: Option<i32>) -> String {
-    value
-        .map(|value| format!("{value} min"))
-        .unwrap_or_else(|| "-".to_string())
-}
-
-fn count(value: Option<i32>) -> String {
-    value
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "-".to_string())
-}
-
-fn time(value: DateTime<Utc>) -> String {
+pub(crate) fn site_time(value: DateTime<Utc>) -> String {
     value
         .with_timezone(&Los_Angeles)
         .format("%-I:%M:%S %p")
         .to_string()
 }
 
-fn clip(value: Option<&str>, fallback: &str) -> String {
-    let Some(value) = value else {
-        return fallback.to_string();
-    };
-    let cleaned = value
-        .chars()
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
-        .collect::<String>();
-    let clipped = cleaned.chars().take(180).collect::<String>();
-    if cleaned.chars().count() > 180 {
-        format!("{clipped}...")
+fn minute_words(value: i32) -> String {
+    if value == 1 {
+        "1 minute".to_string()
     } else {
-        clipped
+        format!("{value} minutes")
     }
+}
+
+fn age_words(value: DateTime<Utc>) -> String {
+    let seconds = Utc::now().signed_duration_since(value).num_seconds().max(0);
+    if seconds == 1 {
+        "1 second ago".to_string()
+    } else {
+        format!("{seconds} seconds ago")
+    }
+}
+
+fn compact_time(value: DateTime<Utc>, timezone: &str) -> String {
+    let timezone = timezone.parse::<Tz>().unwrap_or(Los_Angeles);
+    value
+        .with_timezone(&timezone)
+        .format("%-I:%M:%S%P")
+        .to_string()
+}
+
+fn dashboard_css() -> String {
+    format!(
+        "@font-face{{font-family:a;src:url(data:font/woff2;base64,{}) format('woff2');font-display:block}}{}",
+        DASHBOARD_FONT_B64.trim(),
+        DASHBOARD_CSS
+    )
+}
+
+fn safe_json<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value)
+        .expect("serialize template json")
+        .replace('<', "\\u003c")
 }
 
 fn svg_data_uri(svg: &str) -> String {
@@ -248,6 +285,14 @@ fn svg_data_uri(svg: &str) -> String {
     uri
 }
 
+fn with_white_background(svg: &str) -> String {
+    let svg = svg.trim();
+    let Some((open_tag, body)) = svg.split_once('>') else {
+        return svg.to_string();
+    };
+    format!(r##"{open_tag}><rect width="100%" height="100%" fill="#fff"/>{body}"##)
+}
+
 fn nice_axis(value: i32) -> i32 {
     match value {
         ..=5 => 5,
@@ -277,8 +322,10 @@ mod tests {
             delivery_estimate_minutes: Some(12),
             making_cups: Some(4),
             making_orders: Some(3),
-            notice: None,
-            closing_notice: None,
+            is_estimate: Some(true),
+            text: None,
+            notices: Vec::new(),
+            closing_notices: Vec::new(),
             observed_at: now,
             stale: false,
             stale_after: now,
@@ -300,12 +347,40 @@ mod tests {
                 })
                 .collect(),
         };
+        let location = LocationResponse {
+            slug: "downtown-metreon".to_string(),
+            name: "Downtown Metreon".to_string(),
+            address: "165 4th St, San Francisco, CA 94103".to_string(),
+            latitude: Some(37.784),
+            longitude: Some(-122.403),
+            timezone: "America/Los_Angeles".to_string(),
+            is_enabled: Some(true),
+            support_takeaway: Some(true),
+            is_open: Some(true),
+            pickup_wait_minutes: Some(8),
+            observed_at: Some(now),
+            stale: false,
+            stale_after: Some(now),
+        };
         let template = DashboardTemplate::new(
             Some(status),
             Some(history),
             "https://api.heytea.dev/stream".to_string(),
+            location,
         );
         let html = template.render().expect("render dashboard");
         assert!(html.len() < 40 * 1024);
+        assert!(html.contains("the wait time at heytea downtown metreon is 8 minutes as of "));
+        assert!(html.contains(", which was "));
+        assert!(html.contains("data-observed-at="));
+        assert!(html.contains("data:font/woff2;base64,"));
+        assert!(html.contains("data:image/svg+xml,"));
+        assert!(html.contains("addEventListener(\"load\""));
+        assert!(!html.contains("rel=\"stylesheet\""));
+        assert!(!html.contains("type=\"module\""));
+        assert!(!html.contains("/assets/"));
+        assert!(!html.contains("/a.woff2"));
+        assert!(!html.contains("/icon.svg"));
+        assert!(!html.contains("rel=\"manifest\""));
     }
 }

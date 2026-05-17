@@ -1,1 +1,16 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>heytea.dev API Docs</title><meta name="description" content="OpenAPI documentation for the public heytea.dev API."><meta name="theme-color" content="#f7faf5"><link rel="canonical" href="https://docs.heytea.dev/"><link rel="preload" href="/a.woff2" as="font" type="font/woff2" crossorigin><link rel="icon" href="/icon.svg" type="image/svg+xml">{% for href in assets.css %}<link rel="stylesheet" href="{{ href }}">{% endfor %}</head><body><main><section class="hero"><p class="eyebrow">API docs</p><h1>heytea.dev API</h1><p class="sub">Public singleton endpoints for live wait time, notices, history, freshness, and SSE updates for HeyTea Downtown Metreon.</p><div class="links"><a href="https://api.heytea.dev/openapi.json">OpenAPI JSON</a><a href="https://mcp.heytea.dev/mcp">MCP endpoint</a><a href="https://heytea.dev/">Dashboard</a></div></section><div id="swagger-ui"></div></main>{% for src in assets.scripts %}<script type="module" src="{{ src }}"></script>{% endfor %}</body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>heytea.dev API Docs</title>
+  <meta name="description" content="OpenAPI documentation for the public heytea.dev API.">
+  <link rel="canonical" href="https://docs.heytea.dev/">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  {% for href in assets.css %}<link rel="stylesheet" href="{{ href }}">{% endfor %}
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  {% for src in assets.scripts %}<script type="module" src="{{ src }}"></script>{% endfor %}
+</body>
+</html>

@@ -13,6 +13,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 pub struct AppState {
     pub api_url: String,
     pub public_api_url: String,
+    pub prometheus_url: String,
     pub client: reqwest::Client,
     pub assets: Assets,
 }
@@ -30,6 +31,8 @@ async fn main() -> anyhow::Result<()> {
         api_url: env::var("HEYTEA_API_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string()),
         public_api_url: env::var("HEYTEA_PUBLIC_API_URL")
             .unwrap_or_else(|_| "https://api.heytea.dev".to_string()),
+        prometheus_url: env::var("HEYTEA_PROMETHEUS_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:9090".to_string()),
         client: reqwest::Client::builder()
             .timeout(Duration::from_secs(4))
             .build()?,

@@ -65,6 +65,32 @@ impl RpcError {
     }
 }
 
+fn slug_argument(arguments: &Value) -> &str {
+    arguments
+        .get("slug")
+        .and_then(Value::as_str)
+        .filter(|slug| !slug.is_empty())
+        .unwrap_or("downtown-metreon")
+}
+
+fn number_argument(arguments: &Value, name: &str) -> Result<f64, RpcError> {
+    arguments
+        .get(name)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| RpcError::invalid_params(format!("arguments.{name} must be a number")))
+}
+
+fn distance_miles(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let earth_radius_miles = 3958.8_f64;
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+    let lat1 = lat1.to_radians();
+    let lat2 = lat2.to_radians();
+    let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+    earth_radius_miles * c
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -96,7 +122,7 @@ async fn main() -> anyhow::Result<()> {
 async fn mcp_info() -> Json<Value> {
     Json(json!({
         "name": "heytea.dev",
-        "description": "Public anonymous MCP tools for the HeyTea Downtown Metreon live status API.",
+        "description": "Public anonymous MCP tools for HeyTea locations, wait times, and notices.",
         "transport": "streamable-http",
         "endpoint": "/mcp"
     }))
@@ -137,11 +163,13 @@ async fn dispatch(state: &AppState, request: &JsonRpcRequest) -> Result<Value, R
         })),
         "tools/list" => Ok(json!({
             "tools": [
-                { "name": "get_status", "description": "Get current status for the configured HeyTea Downtown Metreon location", "inputSchema": { "type": "object", "properties": {} } },
-                { "name": "get_wait_time", "description": "Get current wait time", "inputSchema": { "type": "object", "properties": {} } },
-                { "name": "get_notice", "description": "Get current store notice", "inputSchema": { "type": "object", "properties": {} } },
-                { "name": "get_closing_notice", "description": "Get current closing notice", "inputSchema": { "type": "object", "properties": {} } },
-                { "name": "get_history", "description": "Get one-minute historical wait-time data", "inputSchema": { "type": "object", "properties": { "range": { "type": "string", "enum": ["today", "1h", "6h", "24h", "7d", "30d", "1y"], "default": "today" } } } }
+                { "name": "list_locations", "description": "List public HeyTea locations with current open state and pickup wait", "inputSchema": { "type": "object", "properties": {} } },
+                { "name": "find_nearest_location", "description": "Find the nearest public HeyTea location to latitude and longitude", "inputSchema": { "type": "object", "required": ["latitude", "longitude"], "properties": { "latitude": { "type": "number" }, "longitude": { "type": "number" } } } },
+                { "name": "get_status", "description": "Get current status for a HeyTea location slug", "inputSchema": { "type": "object", "properties": { "slug": { "type": "string", "default": "downtown-metreon" } } } },
+                { "name": "get_wait_time", "description": "Get current wait time for a HeyTea location slug", "inputSchema": { "type": "object", "properties": { "slug": { "type": "string", "default": "downtown-metreon" } } } },
+                { "name": "get_notice", "description": "Get current store notice for a HeyTea location slug", "inputSchema": { "type": "object", "properties": { "slug": { "type": "string", "default": "downtown-metreon" } } } },
+                { "name": "get_closing_notice", "description": "Get current closing notice for a HeyTea location slug", "inputSchema": { "type": "object", "properties": { "slug": { "type": "string", "default": "downtown-metreon" } } } },
+                { "name": "get_history", "description": "Get one-minute historical wait-time data for a HeyTea location slug", "inputSchema": { "type": "object", "properties": { "slug": { "type": "string", "default": "downtown-metreon" }, "range": { "type": "string", "enum": ["today", "1h", "6h", "24h", "7d"], "default": "today" } } } }
             ]
         })),
         "tools/call" => {
@@ -161,38 +189,85 @@ async fn dispatch(state: &AppState, request: &JsonRpcRequest) -> Result<Value, R
                 ));
             }
             let value = match name {
+                "list_locations" => serde_json::to_value(
+                    state.client.locations().await.map_err(RpcError::internal)?,
+                )
+                .map_err(RpcError::internal)?,
+                "find_nearest_location" => {
+                    let latitude = number_argument(arguments, "latitude")?;
+                    let longitude = number_argument(arguments, "longitude")?;
+                    let locations = state.client.locations().await.map_err(RpcError::internal)?;
+                    let nearest = locations
+                        .locations
+                        .into_iter()
+                        .filter_map(|location| {
+                            let lat = location.latitude?;
+                            let lon = location.longitude?;
+                            Some((distance_miles(latitude, longitude, lat, lon), location))
+                        })
+                        .min_by(|left, right| left.0.total_cmp(&right.0));
+                    serde_json::to_value(nearest.map(|(distance_miles, location)| {
+                        json!({ "distanceMiles": distance_miles, "location": location })
+                    }))
+                    .map_err(RpcError::internal)?
+                }
                 "get_status" => {
-                    serde_json::to_value(state.client.status().await.map_err(RpcError::internal)?)
-                        .map_err(RpcError::internal)?
+                    let slug = slug_argument(arguments);
+                    serde_json::to_value(
+                        state
+                            .client
+                            .status_for_location(slug)
+                            .await
+                            .map_err(RpcError::internal)?,
+                    )
+                    .map_err(RpcError::internal)?
                 }
-                "get_wait_time" => serde_json::to_value(
-                    state.client.wait_time().await.map_err(RpcError::internal)?,
-                )
-                .map_err(RpcError::internal)?,
+                "get_wait_time" => {
+                    let slug = slug_argument(arguments);
+                    serde_json::to_value(
+                        state
+                            .client
+                            .wait_time_for_location(slug)
+                            .await
+                            .map_err(RpcError::internal)?,
+                    )
+                    .map_err(RpcError::internal)?
+                }
                 "get_notice" => {
-                    serde_json::to_value(state.client.notice().await.map_err(RpcError::internal)?)
-                        .map_err(RpcError::internal)?
+                    let slug = slug_argument(arguments);
+                    serde_json::to_value(
+                        state
+                            .client
+                            .notice_for_location(slug)
+                            .await
+                            .map_err(RpcError::internal)?,
+                    )
+                    .map_err(RpcError::internal)?
                 }
-                "get_closing_notice" => serde_json::to_value(
-                    state
-                        .client
-                        .closing_notice()
-                        .await
-                        .map_err(RpcError::internal)?,
-                )
-                .map_err(RpcError::internal)?,
+                "get_closing_notice" => {
+                    let slug = slug_argument(arguments);
+                    serde_json::to_value(
+                        state
+                            .client
+                            .closing_notice_for_location(slug)
+                            .await
+                            .map_err(RpcError::internal)?,
+                    )
+                    .map_err(RpcError::internal)?
+                }
                 "get_history" => {
+                    let slug = slug_argument(arguments);
                     let range = arguments
                         .get("range")
                         .and_then(Value::as_str)
                         .unwrap_or("today");
-                    if !matches!(range, "today" | "1h" | "6h" | "24h" | "7d" | "30d" | "1y") {
+                    if !matches!(range, "today" | "1h" | "6h" | "24h" | "7d") {
                         return Err(RpcError::invalid_params("unsupported history range"));
                     }
                     serde_json::to_value(
                         state
                             .client
-                            .history(range)
+                            .history_for_location(slug, range)
                             .await
                             .map_err(RpcError::internal)?,
                     )

@@ -8,6 +8,38 @@ pub const DEFAULT_STALE_AFTER_SECONDS: i64 = DEFAULT_POLL_INTERVAL_SECONDS;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct LocationsResponse {
+    pub generated_at: DateTime<Utc>,
+    pub locations: Vec<LocationResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LocationResponse {
+    pub slug: String,
+    pub name: String,
+    pub address: String,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub timezone: String,
+    pub is_enabled: Option<bool>,
+    pub support_takeaway: Option<bool>,
+    pub is_open: Option<bool>,
+    pub pickup_wait_minutes: Option<i32>,
+    pub observed_at: Option<DateTime<Utc>>,
+    pub stale: bool,
+    pub stale_after: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Deserialize, IntoParams)]
+#[into_params(parameter_in = Path)]
+pub struct LocationPath {
+    /// Stable public location slug, such as downtown-metreon.
+    pub slug: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct StatusResponse {
     pub name: String,
     pub address: String,
@@ -16,8 +48,10 @@ pub struct StatusResponse {
     pub delivery_estimate_minutes: Option<i32>,
     pub making_cups: Option<i32>,
     pub making_orders: Option<i32>,
-    pub notice: Option<String>,
-    pub closing_notice: Option<String>,
+    pub is_estimate: Option<bool>,
+    pub text: Option<String>,
+    pub notices: Vec<String>,
+    pub closing_notices: Vec<String>,
     pub observed_at: DateTime<Utc>,
     pub stale: bool,
     pub stale_after: DateTime<Utc>,
@@ -31,6 +65,7 @@ pub struct WaitTimeResponse {
     pub making_cups: Option<i32>,
     pub making_orders: Option<i32>,
     pub is_estimate: Option<bool>,
+    pub text: Option<String>,
     pub observed_at: DateTime<Utc>,
     pub stale: bool,
     pub stale_after: DateTime<Utc>,
@@ -39,7 +74,7 @@ pub struct WaitTimeResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NoticeResponse {
-    pub notice: Option<String>,
+    pub notices: Vec<String>,
     pub observed_at: Option<DateTime<Utc>>,
     pub stale: bool,
 }
@@ -47,7 +82,7 @@ pub struct NoticeResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClosingNoticeResponse {
-    pub closing_notice: Option<String>,
+    pub closing_notices: Vec<String>,
     pub observed_at: Option<DateTime<Utc>>,
     pub stale: bool,
 }
@@ -71,7 +106,7 @@ pub struct ReadyResponse {
 #[derive(Debug, Clone, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct HistoryQuery {
-    /// Lookback range. Supported values: today, 1h, 6h, 24h, 7d, 30d, 1y.
+    /// Lookback range. Supported values: today, 1h, 6h, 24h, 7d.
     pub range: Option<String>,
 }
 
@@ -104,8 +139,6 @@ pub enum HistoryRange {
     SixHours,
     OneDay,
     SevenDays,
-    ThirtyDays,
-    OneYear,
 }
 
 impl HistoryRange {
@@ -116,8 +149,6 @@ impl HistoryRange {
             Self::SixHours => "6 hours",
             Self::OneDay => "24 hours",
             Self::SevenDays => "7 days",
-            Self::ThirtyDays => "30 days",
-            Self::OneYear => "1 year",
         }
     }
 }
@@ -130,8 +161,6 @@ impl fmt::Display for HistoryRange {
             Self::SixHours => "6h",
             Self::OneDay => "24h",
             Self::SevenDays => "7d",
-            Self::ThirtyDays => "30d",
-            Self::OneYear => "1y",
         })
     }
 }
@@ -146,8 +175,6 @@ impl FromStr for HistoryRange {
             "6h" => Ok(Self::SixHours),
             "24h" => Ok(Self::OneDay),
             "7d" => Ok(Self::SevenDays),
-            "30d" => Ok(Self::ThirtyDays),
-            "1y" => Ok(Self::OneYear),
             _ => Err("unsupported range"),
         }
     }

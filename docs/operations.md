@@ -11,7 +11,7 @@
 
 These are Cloudflare DNS-only records pointing at the DigitalOcean droplet. Caddy terminates HTTPS on the host.
 
-## Tailnet-Only Domains
+## Reserved Internal Domains
 
 - `grafana.heytea.dev`
 - `prom.heytea.dev`
@@ -20,6 +20,14 @@ These are Cloudflare DNS-only records pointing at the DigitalOcean droplet. Cadd
 - `postgres.heytea.dev`
 
 Postgres uses the local Unix socket with peer authentication. It should not bind to Caddy or public interfaces.
+
+These names are not public Cloudflare records. Grafana currently binds to host-local `127.0.0.1:3002`; access it over Tailscale with an SSH tunnel:
+
+```sh
+ssh -L 3002:127.0.0.1:3002 root@heytea-dev
+```
+
+Then open `http://127.0.0.1:3002` locally.
 
 ## Backups
 

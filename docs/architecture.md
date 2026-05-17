@@ -1,8 +1,8 @@
 # Architecture
 
-heytea.dev is a singleton live status platform for the HeyTea Downtown Metreon location.
+heytea.dev is a live status platform for public HeyTea locations.
 
-The public API never accepts or returns an upstream shop ID. The poller reads a one-line config file containing the upstream HeyTea shop ID and writes normalized observations into Postgres/TimescaleDB.
+The public API uses stable location slugs and never accepts or returns an upstream shop ID. The poller discovers locations from public HeyTea app endpoints and writes normalized observations into Postgres/TimescaleDB.
 
 ```text
 HeyTea public app endpoints
@@ -11,7 +11,7 @@ HeyTea public app endpoints
   -> pg_notify('heytea_status_updated')
   -> heytea-api LISTEN task
   -> in-process SSE broadcast
-  -> browser EventSource dashboard updates
+  -> browser EventSource location-page updates
 ```
 
 Postgres remains canonical and also provides live update fanout with `LISTEN`/`NOTIFY`. Redis is intentionally not in the active path.
@@ -27,8 +27,8 @@ With the default 60 second poll interval, data observed 30 seconds ago has 30 se
 ## Services
 
 - `heytea-api`: Axum JSON API, OpenAPI JSON, Postgres notification listener, and SSE stream.
-- `heytea-site`: Axum + Askama server-rendered dashboard, status page, docs shell, and discovery routes. Vite builds the browser assets and Swagger UI bundle.
-- `heytea-poller`: polls upstream every minute, persists normalized state, then publishes a Postgres notification after commit.
+- `heytea-site`: Axum + Askama server-rendered location finder, optimized location pages, status page, docs shell, and discovery routes. Vite builds generic docs/status browser assets.
+- `heytea-poller`: refreshes the location catalog daily, polls wait times every minute, polls provider-supported current notices every minute, persists normalized state in bulk, then publishes a Postgres notification after commit.
 - `heytea-mcp`: public anonymous HTTP MCP endpoint backed by the local API.
 - `postgres`: canonical state and Timescale history.
 - `umami`: self-hosted analytics backed by Postgres.

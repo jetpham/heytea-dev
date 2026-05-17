@@ -1,10 +1,28 @@
 use crate::error::ApiError;
 use chrono::{DateTime, TimeDelta, Utc};
 use heytea_core::{
-    ClosingNoticeResponse, HistoryPoint, HistoryRange, HistoryResponse, NoticeResponse,
-    StatusResponse, WaitTimeResponse, DEFAULT_STALE_AFTER_SECONDS,
+    ClosingNoticeResponse, HistoryPoint, HistoryRange, HistoryResponse, LocationResponse,
+    LocationsResponse, NoticeResponse, StatusResponse, WaitTimeResponse,
+    DEFAULT_STALE_AFTER_SECONDS,
 };
 use sqlx::FromRow;
+
+pub const DEFAULT_LOCATION_SLUG: &str = "downtown-metreon";
+
+#[derive(Debug, FromRow)]
+struct LocationRow {
+    slug: String,
+    name: String,
+    address: String,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    timezone: String,
+    is_enabled: Option<bool>,
+    support_takeaway: Option<bool>,
+    is_open: Option<bool>,
+    pickup_wait_minutes: Option<i32>,
+    observed_at: Option<DateTime<Utc>>,
+}
 
 #[derive(Debug, FromRow)]
 struct CurrentStatusRow {
@@ -16,9 +34,12 @@ struct CurrentStatusRow {
     making_cups: Option<i32>,
     making_orders: Option<i32>,
     is_estimate: Option<bool>,
-    notice: Option<String>,
-    closing_notice: Option<String>,
-    observed_at: DateTime<Utc>,
+    text: Option<String>,
+    notices: Vec<String>,
+    closing_notices: Vec<String>,
+    observed_at: Option<DateTime<Utc>>,
+    notices_observed_at: Option<DateTime<Utc>>,
+    closing_notices_observed_at: Option<DateTime<Utc>>,
 }
 
 pub fn stale_after(observed_at: DateTime<Utc>) -> DateTime<Utc> {
@@ -33,35 +54,134 @@ fn is_stale(observed_at: DateTime<Utc>) -> bool {
     Utc::now() > stale_after(observed_at)
 }
 
-async fn current_status_row(pool: &sqlx::PgPool) -> Result<CurrentStatusRow, ApiError> {
+pub async fn locations(pool: &sqlx::PgPool) -> Result<LocationsResponse, ApiError> {
+    let rows = sqlx::query_as::<_, LocationRow>(
+        r#"
+        select
+          l.slug,
+          l.name,
+          l.address,
+          l.latitude,
+          l.longitude,
+          l.timezone,
+          l.is_enabled,
+          l.support_takeaway,
+          s.is_open,
+          s.pickup_wait_minutes,
+          s.wait_observed_at as observed_at
+        from locations l
+        left join location_current_status s on s.shop_id = l.shop_id
+        where coalesce(l.is_enabled, true) is true
+        order by
+          s.is_open desc nulls last,
+          s.pickup_wait_minutes asc nulls last,
+          l.name asc
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(LocationsResponse {
+        generated_at: Utc::now(),
+        locations: rows.into_iter().map(location_response).collect(),
+    })
+}
+
+pub async fn location(pool: &sqlx::PgPool, slug: &str) -> Result<LocationResponse, ApiError> {
+    let row = location_row(pool, slug).await?;
+    Ok(location_response(row))
+}
+
+async fn location_row(pool: &sqlx::PgPool, slug: &str) -> Result<LocationRow, ApiError> {
+    let row = sqlx::query_as::<_, LocationRow>(
+        r#"
+        select
+          l.slug,
+          l.name,
+          l.address,
+          l.latitude,
+          l.longitude,
+          l.timezone,
+          l.is_enabled,
+          l.support_takeaway,
+          s.is_open,
+          s.pickup_wait_minutes,
+          s.wait_observed_at as observed_at
+        from locations l
+        left join location_current_status s on s.shop_id = l.shop_id
+        where l.slug = $1
+        limit 1
+        "#,
+    )
+    .bind(slug)
+    .fetch_optional(pool)
+    .await?;
+
+    row.ok_or_else(|| ApiError::not_found("location not found"))
+}
+
+fn location_response(row: LocationRow) -> LocationResponse {
+    LocationResponse {
+        slug: row.slug,
+        name: row.name,
+        address: row.address,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        timezone: row.timezone,
+        is_enabled: row.is_enabled,
+        support_takeaway: row.support_takeaway,
+        is_open: row.is_open,
+        pickup_wait_minutes: row.pickup_wait_minutes,
+        observed_at: row.observed_at,
+        stale: row.observed_at.map(is_stale).unwrap_or(true),
+        stale_after: row.observed_at.map(stale_after),
+    }
+}
+
+async fn current_status_row(pool: &sqlx::PgPool, slug: &str) -> Result<CurrentStatusRow, ApiError> {
     let row = sqlx::query_as::<_, CurrentStatusRow>(
         r#"
         select
-          coalesce(m.name, 'Downtown Metreon') as name,
-          coalesce(m.address, '165 4th St, San Francisco, CA 94103') as address,
+          l.name,
+          l.address,
           s.is_open,
           s.pickup_wait_minutes,
           s.delivery_estimate_minutes,
           s.making_cups,
           s.making_orders,
           s.is_estimate,
-          s.notice,
-          s.closing_notice,
-          s.observed_at
-        from current_status s
-        left join store_metadata m on m.singleton = true
-        where s.singleton = true
+          s.wait_text as text,
+          s.notices,
+          s.closing_notices,
+          s.wait_observed_at as observed_at,
+          s.notices_observed_at,
+          s.closing_notices_observed_at
+        from locations l
+        join location_current_status s on s.shop_id = l.shop_id
+        where l.slug = $1
         limit 1
         "#,
     )
+    .bind(slug)
     .fetch_optional(pool)
     .await?;
 
-    row.ok_or_else(|| ApiError::not_ready("status has not been observed yet"))
+    match row {
+        Some(row) if row.observed_at.is_some() => Ok(row),
+        Some(_) => Err(ApiError::not_ready("wait time has not been observed yet")),
+        None => {
+            location_row(pool, slug).await?;
+            Err(ApiError::not_ready("status has not been observed yet"))
+        }
+    }
 }
 
 pub async fn status(pool: &sqlx::PgPool) -> Result<StatusResponse, ApiError> {
-    let row = current_status_row(pool).await?;
+    status_for_slug(pool, DEFAULT_LOCATION_SLUG).await
+}
+
+pub async fn status_for_slug(pool: &sqlx::PgPool, slug: &str) -> Result<StatusResponse, ApiError> {
+    let row = current_status_row(pool, slug).await?;
     Ok(StatusResponse {
         name: row.name,
         address: row.address,
@@ -70,43 +190,67 @@ pub async fn status(pool: &sqlx::PgPool) -> Result<StatusResponse, ApiError> {
         delivery_estimate_minutes: row.delivery_estimate_minutes,
         making_cups: row.making_cups,
         making_orders: row.making_orders,
-        notice: row.notice,
-        closing_notice: row.closing_notice,
-        observed_at: row.observed_at,
-        stale: is_stale(row.observed_at),
-        stale_after: stale_after(row.observed_at),
+        is_estimate: row.is_estimate,
+        text: row.text,
+        notices: row.notices,
+        closing_notices: row.closing_notices,
+        observed_at: row.observed_at.expect("checked current status observed_at"),
+        stale: is_stale(row.observed_at.expect("checked current status observed_at")),
+        stale_after: stale_after(row.observed_at.expect("checked current status observed_at")),
     })
 }
 
 pub async fn wait_time(pool: &sqlx::PgPool) -> Result<WaitTimeResponse, ApiError> {
-    let row = current_status_row(pool).await?;
+    wait_time_for_slug(pool, DEFAULT_LOCATION_SLUG).await
+}
+
+pub async fn wait_time_for_slug(
+    pool: &sqlx::PgPool,
+    slug: &str,
+) -> Result<WaitTimeResponse, ApiError> {
+    let row = current_status_row(pool, slug).await?;
     Ok(WaitTimeResponse {
         pickup_wait_minutes: row.pickup_wait_minutes,
         delivery_estimate_minutes: row.delivery_estimate_minutes,
         making_cups: row.making_cups,
         making_orders: row.making_orders,
         is_estimate: row.is_estimate,
-        observed_at: row.observed_at,
-        stale: is_stale(row.observed_at),
-        stale_after: stale_after(row.observed_at),
+        text: row.text,
+        observed_at: row.observed_at.expect("checked current status observed_at"),
+        stale: is_stale(row.observed_at.expect("checked current status observed_at")),
+        stale_after: stale_after(row.observed_at.expect("checked current status observed_at")),
     })
 }
 
 pub async fn notice(pool: &sqlx::PgPool) -> Result<NoticeResponse, ApiError> {
-    let row = current_status_row(pool).await?;
+    notice_for_slug(pool, DEFAULT_LOCATION_SLUG).await
+}
+
+pub async fn notice_for_slug(pool: &sqlx::PgPool, slug: &str) -> Result<NoticeResponse, ApiError> {
+    let row = current_status_row(pool, slug).await?;
     Ok(NoticeResponse {
-        notice: row.notice,
-        observed_at: Some(row.observed_at),
-        stale: is_stale(row.observed_at),
+        notices: row.notices,
+        observed_at: row.notices_observed_at,
+        stale: row.notices_observed_at.map(is_stale).unwrap_or(true),
     })
 }
 
 pub async fn closing_notice(pool: &sqlx::PgPool) -> Result<ClosingNoticeResponse, ApiError> {
-    let row = current_status_row(pool).await?;
+    closing_notice_for_slug(pool, DEFAULT_LOCATION_SLUG).await
+}
+
+pub async fn closing_notice_for_slug(
+    pool: &sqlx::PgPool,
+    slug: &str,
+) -> Result<ClosingNoticeResponse, ApiError> {
+    let row = current_status_row(pool, slug).await?;
     Ok(ClosingNoticeResponse {
-        closing_notice: row.closing_notice,
-        observed_at: Some(row.observed_at),
-        stale: is_stale(row.observed_at),
+        closing_notices: row.closing_notices,
+        observed_at: row.closing_notices_observed_at,
+        stale: row
+            .closing_notices_observed_at
+            .map(is_stale)
+            .unwrap_or(true),
     })
 }
 
@@ -114,9 +258,10 @@ pub async fn schema_ready(pool: &sqlx::PgPool) -> bool {
     sqlx::query_scalar::<_, bool>(
         r#"
         select
-          to_regclass('public.current_status') is not null
-          and to_regclass('public.wait_time_observations') is not null
-          and to_regclass('public.store_metadata') is not null
+          to_regclass('public.locations') is not null
+          and to_regclass('public.location_current_status') is not null
+          and to_regclass('public.location_wait_time_observations') is not null
+          and to_regclass('public.location_wait_time_1m') is not null
           and exists (select 1 from pg_extension where extname = 'timescaledb')
         "#,
     )
@@ -141,23 +286,25 @@ pub async fn history(
     pool: &sqlx::PgPool,
     range: HistoryRange,
 ) -> Result<HistoryResponse, ApiError> {
+    history_for_slug(pool, DEFAULT_LOCATION_SLUG, range).await
+}
+
+pub async fn history_for_slug(
+    pool: &sqlx::PgPool,
+    slug: &str,
+    range: HistoryRange,
+) -> Result<HistoryResponse, ApiError> {
+    location_row(pool, slug).await?;
+
     let sql = match range {
         HistoryRange::Today => r#"
-            with current as (
-              select is_open from current_status where singleton = true limit 1
+            with location as (
+              select l.shop_id, l.timezone
+              from locations l
+              where l.slug = $1
             ), day_start as (
-              select date_trunc('day', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles' as start_at
-            ), last_closed as (
-              select max(w.observed_at) as observed_at
-              from wait_time_observations w, day_start
-              where w.observed_at >= day_start.start_at
-                and w.is_open is distinct from true
-            ), open_start as (
-              select min(w.observed_at) as start_at
-              from wait_time_observations w, day_start, last_closed
-              where w.observed_at >= day_start.start_at
-                and w.is_open is true
-                and (last_closed.observed_at is null or w.observed_at > last_closed.observed_at)
+              select date_trunc('day', now() at time zone location.timezone) at time zone location.timezone as start_at
+              from location
             )
             select
               time_bucket('1 minute'::interval, w.observed_at) as start,
@@ -168,28 +315,49 @@ pub async fn history(
               avg(w.making_cups)::float8 as avg_making_cups,
               avg(w.making_orders)::float8 as avg_making_orders,
               count(*)::int8 as sample_count
-            from wait_time_observations w, open_start, current
-            where current.is_open is true
-              and open_start.start_at is not null
-              and w.observed_at >= open_start.start_at
-              and w.is_open is true
+            from location_wait_time_observations w, day_start, location
+            where w.shop_id = location.shop_id
+              and w.observed_at >= day_start.start_at
             group by 1
+            order by 1 asc
+            "#
+        .to_string(),
+        HistoryRange::SevenDays => r#"
+            with location as (
+              select shop_id from locations where slug = $1
+            )
+            select
+              w.bucket as start,
+              w.avg_pickup_wait_minutes,
+              w.min_pickup_wait_minutes,
+              w.max_pickup_wait_minutes,
+              w.avg_delivery_estimate_minutes,
+              w.avg_making_cups,
+              w.avg_making_orders,
+              w.sample_count
+            from location_wait_time_1m w, location
+            where w.shop_id = location.shop_id
+              and w.bucket >= now() - '7 days'::interval
             order by 1 asc
             "#
         .to_string(),
         _ => format!(
             r#"
+            with location as (
+              select shop_id from locations where slug = $1
+            )
             select
-              time_bucket('1 minute'::interval, observed_at) as start,
-              avg(pickup_wait_minutes)::float8 as avg_pickup_wait_minutes,
-              min(pickup_wait_minutes) as min_pickup_wait_minutes,
-              max(pickup_wait_minutes) as max_pickup_wait_minutes,
-              avg(delivery_estimate_minutes)::float8 as avg_delivery_estimate_minutes,
-              avg(making_cups)::float8 as avg_making_cups,
-              avg(making_orders)::float8 as avg_making_orders,
+              time_bucket('1 minute'::interval, w.observed_at) as start,
+              avg(w.pickup_wait_minutes)::float8 as avg_pickup_wait_minutes,
+              min(w.pickup_wait_minutes) as min_pickup_wait_minutes,
+              max(w.pickup_wait_minutes) as max_pickup_wait_minutes,
+              avg(w.delivery_estimate_minutes)::float8 as avg_delivery_estimate_minutes,
+              avg(w.making_cups)::float8 as avg_making_cups,
+              avg(w.making_orders)::float8 as avg_making_orders,
               count(*)::int8 as sample_count
-            from wait_time_observations
-            where observed_at >= now() - '{}'::interval
+            from location_wait_time_observations w, location
+            where w.shop_id = location.shop_id
+              and w.observed_at >= now() - '{}'::interval
             group by 1
             order by 1 asc
             "#,
@@ -198,6 +366,7 @@ pub async fn history(
     };
 
     let rows = sqlx::query_as::<_, HistoryPointRow>(&sql)
+        .bind(slug)
         .fetch_all(pool)
         .await?;
 

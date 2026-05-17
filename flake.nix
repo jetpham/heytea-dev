@@ -27,16 +27,16 @@
           pkgs = import nixpkgs { inherit system; };
           version = "0.1.0";
 
-          rustBinary = { package, pname ? package }:
-            pkgs.rustPlatform.buildRustPackage {
+          rustBinary = { package, pname ? package, extraNativeBuildInputs ? [ ], extraAttrs ? { } }:
+            pkgs.rustPlatform.buildRustPackage ({
               inherit pname version;
               src = ./.;
               cargoLock.lockFile = ./Cargo.lock;
               cargoBuildFlags = [ "-p" package ];
               cargoTestFlags = [ "-p" package ];
-              nativeBuildInputs = [ pkgs.pkg-config ];
+              nativeBuildInputs = [ pkgs.pkg-config ] ++ extraNativeBuildInputs;
               buildInputs = [ pkgs.openssl ];
-            };
+            } // extraAttrs);
 
           assets = pkgs.stdenvNoCC.mkDerivation {
             pname = "heytea-assets";
@@ -129,7 +129,16 @@
             '';
           };
 
-          siteBinary = rustBinary { package = "heytea-site"; };
+          dashboardFontTools = pkgs.python3.withPackages (ps: [
+            ps.brotli
+            ps.fonttools
+          ]);
+
+          siteBinary = rustBinary {
+            package = "heytea-site";
+            extraNativeBuildInputs = [ dashboardFontTools ];
+            extraAttrs.ATKINSON_FONT = "${pkgs.atkinson-hyperlegible}/share/fonts/opentype/AtkinsonHyperlegible-Regular.otf";
+          };
 
           site = pkgs.stdenvNoCC.mkDerivation {
             pname = "heytea-site";
@@ -200,12 +209,15 @@
               pnpm
               jq
               gh
+              atkinson-hyperlegible
+              dashboardFontTools
               deploy-rs.packages.${system}.deploy-rs
               agenix.packages.${system}.default
             ];
 
             shellHook = ''
               export SQLX_OFFLINE=true
+              export ATKINSON_FONT=${pkgs.atkinson-hyperlegible}/share/fonts/opentype/AtkinsonHyperlegible-Regular.otf
             '';
           };
 

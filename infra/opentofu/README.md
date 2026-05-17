@@ -1,6 +1,6 @@
 # OpenTofu Infra
 
-This directory defines the DigitalOcean VPS, Cloudflare DNS/proxy settings, and Backblaze B2 backup bucket for `heytea.dev`.
+This directory defines the DigitalOcean VPS, Cloudflare DNS settings, and Backblaze B2 backup bucket for `heytea.dev`.
 
 Do not run `tofu apply` casually. The files are scaffolded for review and CI planning, but applying them will create or change real infrastructure.
 
@@ -16,7 +16,7 @@ The build output is `result/heytea-dev-digital-ocean.qcow2`.
 
 For first boot, set `bootstrap_ssh_source_addresses = ["<your-ip>/32"]` temporarily so you can SSH in and join Tailscale. Remove it and re-apply OpenTofu after Tailscale works.
 
-Public Cloudflare-proxied records:
+Public Cloudflare DNS-only records:
 
 - `heytea.dev`
 - `api.heytea.dev`

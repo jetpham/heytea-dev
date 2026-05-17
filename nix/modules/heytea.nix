@@ -36,8 +36,6 @@ in
       group = "heytea";
     };
 
-    environment.etc."heytea/shop-id".text = "1000092\n";
-
     services.postgresql = {
       enable = true;
       package = pkgs.postgresql_16.withPackages (ps: [ ps.timescaledb ]);
@@ -111,12 +109,12 @@ in
         Restart = "always";
         User = "heytea";
         Group = "heytea";
-        ReadOnlyPaths = [ cfg.shopConfigPath ];
       };
       environment = {
         DATABASE_URL = "postgresql:///heytea?host=/run/postgresql&user=heytea";
-        HEYTEA_SHOP_CONFIG = toString cfg.shopConfigPath;
         HEYTEA_POLLER_INTERVAL_SECONDS = "60";
+        HEYTEA_CATALOG_INTERVAL_SECONDS = "86400";
+        HEYTEA_UPSTREAM_CONCURRENCY = "16";
         RUST_LOG = "info";
       };
     };
@@ -148,6 +146,7 @@ in
         HEYTEA_SITE_BIND = "127.0.0.1:3100";
         HEYTEA_API_URL = "http://127.0.0.1:3000";
         HEYTEA_PUBLIC_API_URL = "https://${cfg.apiDomain}";
+        HEYTEA_PROMETHEUS_URL = "http://127.0.0.1:9090";
       };
     };
 

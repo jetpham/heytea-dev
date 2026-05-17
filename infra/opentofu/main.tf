@@ -72,7 +72,7 @@ resource "cloudflare_record" "public" {
   name    = each.key
   type    = "A"
   value   = digitalocean_droplet.heytea.ipv4_address
-  proxied = true
+  proxied = false
   ttl     = 1
 }
 
