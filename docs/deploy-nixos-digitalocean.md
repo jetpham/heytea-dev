@@ -101,8 +101,8 @@ Check public endpoints after DNS propagates:
 ```sh
 curl https://heytea.dev/
 curl https://api.heytea.dev/readyz
-curl https://api.heytea.dev/status
-curl https://api.heytea.dev/wait-time
+curl https://api.heytea.dev/locations
+curl https://api.heytea.dev/locations/downtown-metreon/status
 curl https://docs.heytea.dev/
 curl https://mcp.heytea.dev/
 curl https://analytics.heytea.dev/
@@ -112,7 +112,7 @@ curl https://status.heytea.dev/
 If the local resolver has stale negative cache immediately after DNS creation, validate against the droplet directly while preserving TLS hostname verification:
 
 ```sh
-curl --resolve api.heytea.dev:443:<droplet-ip> https://api.heytea.dev/status
+curl --resolve api.heytea.dev:443:<droplet-ip> https://api.heytea.dev/locations/downtown-metreon/status
 ```
 
 ## Lock Down SSH
@@ -134,10 +134,4 @@ ssh -o BatchMode=yes -o ConnectTimeout=8 root@<droplet-ip> true
 
 ## CI/CD
 
-The GitHub Actions deploy workflow expects:
-
-- `TS_OAUTH_CLIENT_ID`
-- `TS_OAUTH_SECRET`
-- `DEPLOY_SSH_KEY`
-
-Do not push deployment changes until those secrets are configured.
+See `docs/ci-cd.md` for the GitHub Actions, Tailscale, deploy key, crates.io Trusted Publisher, and release setup required before enabling production automation.

@@ -1,0 +1,69 @@
+name: Release CLI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Existing or new release tag, such as v0.1.1
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-cli-${{ github.event.release.tag_name || github.event.inputs.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  release-cli:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name || github.ref }}
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Use existing release tag when dispatched manually
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+            git checkout "$RELEASE_TAG"
+          fi
+      - name: Build CLI package
+        run: nix --accept-flake-config build .#heytea-cli --out-link result-heytea-cli
+      - name: Package CLI binary
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          package="heytea-${version}-x86_64-linux"
+          mkdir -p "dist/$package"
+          cp -L result-heytea-cli/bin/heytea "dist/$package/heytea"
+          chmod 0755 "dist/$package/heytea"
+          tar -C dist -czf "dist/$package.tar.gz" "$package"
+          (cd dist && sha256sum "$package.tar.gz" > SHA256SUMS)
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: heytea-cli-${{ env.RELEASE_TAG }}-x86_64-linux
+          path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+      - name: Ensure release exists
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          target=$(git rev-parse HEAD)
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" || gh release create "$RELEASE_TAG" --target "$target" --title "$RELEASE_TAG" --notes "heytea CLI $RELEASE_TAG"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Upload release assets
+        run: gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}

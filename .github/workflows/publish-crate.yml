@@ -14,6 +14,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: publish-crate-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -24,14 +28,19 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Check release tag matches crate version
+        if: ${{ github.event_name == 'release' }}
+        run: |
+          version=$(nix develop --accept-flake-config -c sh -c 'cargo metadata --no-deps --format-version=1 | jq -r '\''.packages[] | select(.name == "heytea") | .version'\''')
+          test "v$version" = "${{ github.event.release.tag_name }}"
       - name: Verify package
-        run: nix develop -c cargo publish -p heytea --dry-run
+        run: nix develop --accept-flake-config -c cargo publish -p heytea --dry-run --locked
       - name: Authenticate with crates.io
         id: auth
         if: ${{ github.event_name == 'release' || github.event.inputs.dry_run == 'false' }}
         uses: rust-lang/crates-io-auth-action@v1
       - name: Publish to crates.io
         if: ${{ github.event_name == 'release' || github.event.inputs.dry_run == 'false' }}
-        run: nix develop -c cargo publish -p heytea
+        run: nix develop --accept-flake-config -c cargo publish -p heytea --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

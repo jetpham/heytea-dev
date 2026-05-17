@@ -49,6 +49,10 @@ pnpm build
 nix build .#heytea-api .#heytea-poller .#heytea-mcp .#heytea-cli .#heytea-assets .#heytea-site-assets .#heytea-site .#heytea-migrations --no-link
 ```
 
+## CI/CD
+
+GitHub Actions run CI on pull requests and pushes to `main`, deploy production after successful CI on `main`, publish the Rust SDK from GitHub releases, and attach the Linux CLI tarball to releases. See `docs/ci-cd.md` for required GitHub secrets, environments, and Tailscale/crates.io setup.
+
 ## DigitalOcean NixOS Image
 
 Build the production NixOS custom image with:

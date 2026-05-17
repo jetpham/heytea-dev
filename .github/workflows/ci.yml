@@ -5,22 +5,37 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: cachix/install-nix-action@v30
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Nix flake check
-        run: nix flake check --no-build
+        run: nix --accept-flake-config flake check --no-build
+      - name: Rust format
+        run: nix develop --accept-flake-config -c cargo fmt --check
       - name: Rust check
-        run: nix develop -c cargo check --workspace
+        run: nix develop --accept-flake-config -c cargo check --workspace
+      - name: Rust tests
+        run: nix develop --accept-flake-config -c cargo test --workspace
       - name: Site build
-        run: nix develop -c pnpm install --frozen-lockfile && nix develop -c pnpm build
+        run: nix develop --accept-flake-config -c pnpm install --frozen-lockfile && nix develop --accept-flake-config -c pnpm --filter @heytea/assets build
+      - name: Diff hygiene
+        run: git diff --check
       - name: Build packages
-        run: nix build .#heytea-api .#heytea-poller .#heytea-mcp .#heytea-cli .#heytea-assets .#heytea-site-assets .#heytea-site .#heytea-migrations --no-link
+        run: nix --accept-flake-config build .#heytea-api .#heytea-poller .#heytea-mcp .#heytea-cli .#heytea-assets .#heytea-site-assets .#heytea-site .#heytea-migrations --no-link
       - name: OpenTofu validate
-        run: nix develop -c sh -c 'cd infra/opentofu && tofu init -backend=false && tofu validate'
+        run: nix develop --accept-flake-config -c sh -c 'cd infra/opentofu && tofu init -backend=false && tofu validate'

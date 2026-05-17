@@ -1,5 +1,5 @@
 {
-  description = "heytea.dev singleton wait-time dashboard";
+  description = "heytea.dev location finder and wait-time platform";
 
   nixConfig = {
     max-jobs = "auto";

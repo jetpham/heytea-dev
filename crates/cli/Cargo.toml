@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "CLI for the singleton heytea.dev API"
+description = "CLI for the heytea.dev location and wait-time API"
 
 [[bin]]
 name = "heytea"
