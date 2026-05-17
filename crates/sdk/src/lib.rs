@@ -24,10 +24,6 @@ impl Client {
         Self::new("https://api.heytea.dev")
     }
 
-    pub async fn status(&self) -> anyhow::Result<StatusResponse> {
-        self.get("status").await
-    }
-
     pub async fn locations(&self) -> anyhow::Result<LocationsResponse> {
         self.get("locations").await
     }
@@ -40,24 +36,12 @@ impl Client {
         self.get(&format!("locations/{slug}/status")).await
     }
 
-    pub async fn wait_time(&self) -> anyhow::Result<WaitTimeResponse> {
-        self.get("wait-time").await
-    }
-
     pub async fn wait_time_for_location(&self, slug: &str) -> anyhow::Result<WaitTimeResponse> {
         self.get(&format!("locations/{slug}/wait-time")).await
     }
 
-    pub async fn notice(&self) -> anyhow::Result<NoticeResponse> {
-        self.get("notice").await
-    }
-
     pub async fn notice_for_location(&self, slug: &str) -> anyhow::Result<NoticeResponse> {
         self.get(&format!("locations/{slug}/notice")).await
-    }
-
-    pub async fn closing_notice(&self) -> anyhow::Result<ClosingNoticeResponse> {
-        self.get("closing-notice").await
     }
 
     pub async fn closing_notice_for_location(
@@ -65,22 +49,6 @@ impl Client {
         slug: &str,
     ) -> anyhow::Result<ClosingNoticeResponse> {
         self.get(&format!("locations/{slug}/closing-notice")).await
-    }
-
-    pub async fn history(&self, range: &str) -> anyhow::Result<HistoryResponse> {
-        let mut url = self.base_url.join("history")?;
-        {
-            let mut query = url.query_pairs_mut();
-            query.append_pair("range", range);
-        }
-        self.http
-            .get(url)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await
-            .map_err(Into::into)
     }
 
     pub async fn history_for_location(

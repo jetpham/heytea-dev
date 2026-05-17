@@ -1,5 +1,4 @@
 use crate::db;
-use heytea_core::StatusResponse;
 use sqlx::postgres::PgListener;
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -9,7 +8,7 @@ const STATUS_CHANNEL: &str = "heytea_status_updated";
 pub fn spawn_status_listener(
     database_url: String,
     pool: sqlx::PgPool,
-    sender: broadcast::Sender<StatusResponse>,
+    sender: broadcast::Sender<()>,
 ) {
     tokio::spawn(async move {
         loop {
@@ -24,7 +23,7 @@ pub fn spawn_status_listener(
 async fn listen_once(
     database_url: &str,
     pool: &sqlx::PgPool,
-    sender: &broadcast::Sender<StatusResponse>,
+    sender: &broadcast::Sender<()>,
 ) -> anyhow::Result<()> {
     let mut listener = PgListener::connect(database_url).await?;
     listener.listen(STATUS_CHANNEL).await?;
@@ -41,11 +40,10 @@ async fn listen_once(
             "received status notification"
         );
 
-        match db::status(pool).await {
-            Ok(status) => {
-                let _ = sender.send(status);
-            }
-            Err(error) => tracing::warn!(?error, "status notification could not load status"),
+        if db::schema_ready(pool).await {
+            let _ = sender.send(());
+        } else {
+            tracing::warn!("status notification received before schema was ready");
         }
     }
 }

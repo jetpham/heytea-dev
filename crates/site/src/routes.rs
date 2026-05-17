@@ -197,8 +197,8 @@ async fn icon() -> impl IntoResponse {
 
 async fn og_image(State(state): State<AppState>) -> impl IntoResponse {
     let (status, history) = tokio::join!(
-        api_json::<StatusResponse>(&state, "/status"),
-        api_json::<HistoryResponse>(&state, "/history?range=today")
+        api_json::<StatusResponse>(&state, "/locations/downtown-metreon/status"),
+        api_json::<HistoryResponse>(&state, "/locations/downtown-metreon/history?range=today")
     );
     let view = templates::DashboardView::new(
         status.as_ref(),
@@ -670,7 +670,7 @@ const LLMS_TXT: &str = r#"# heytea.dev
 
 ## Authentication
 
-No authentication is required. The API exposes public slugs, not upstream shop IDs. There are no menu endpoints and no `/v1` prefix.
+No authentication is required. The API exposes public slugs, not upstream shop IDs. There are no menu endpoints, no `/v1` prefix, and no default-location aliases.
 
 ## Freshness
 

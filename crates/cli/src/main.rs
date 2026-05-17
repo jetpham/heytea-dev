@@ -13,27 +13,27 @@ struct Args {
 enum Command {
     Locations,
     Location {
-        #[arg(default_value = "downtown-metreon")]
+        #[arg(value_name = "SLUG")]
         slug: String,
     },
     Status {
-        #[arg(default_value = "downtown-metreon")]
+        #[arg(value_name = "SLUG")]
         slug: String,
     },
     WaitTime {
-        #[arg(default_value = "downtown-metreon")]
+        #[arg(value_name = "SLUG")]
         slug: String,
     },
     Notice {
-        #[arg(default_value = "downtown-metreon")]
+        #[arg(value_name = "SLUG")]
         slug: String,
     },
     ClosingNotice {
-        #[arg(default_value = "downtown-metreon")]
+        #[arg(value_name = "SLUG")]
         slug: String,
     },
     History {
-        #[arg(default_value = "downtown-metreon")]
+        #[arg(value_name = "SLUG")]
         slug: String,
         #[arg(long, default_value = "24h")]
         range: String,

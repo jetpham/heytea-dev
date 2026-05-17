@@ -65,12 +65,12 @@ impl RpcError {
     }
 }
 
-fn slug_argument(arguments: &Value) -> &str {
+fn slug_argument(arguments: &Value) -> Result<&str, RpcError> {
     arguments
         .get("slug")
         .and_then(Value::as_str)
         .filter(|slug| !slug.is_empty())
-        .unwrap_or("downtown-metreon")
+        .ok_or_else(|| RpcError::invalid_params("arguments.slug must be a non-empty string"))
 }
 
 fn number_argument(arguments: &Value, name: &str) -> Result<f64, RpcError> {
@@ -165,11 +165,11 @@ async fn dispatch(state: &AppState, request: &JsonRpcRequest) -> Result<Value, R
             "tools": [
                 { "name": "list_locations", "description": "List public HeyTea locations with current open state and pickup wait", "inputSchema": { "type": "object", "properties": {} } },
                 { "name": "find_nearest_location", "description": "Find the nearest public HeyTea location to latitude and longitude", "inputSchema": { "type": "object", "required": ["latitude", "longitude"], "properties": { "latitude": { "type": "number" }, "longitude": { "type": "number" } } } },
-                { "name": "get_status", "description": "Get current status for a HeyTea location slug", "inputSchema": { "type": "object", "properties": { "slug": { "type": "string", "default": "downtown-metreon" } } } },
-                { "name": "get_wait_time", "description": "Get current wait time for a HeyTea location slug", "inputSchema": { "type": "object", "properties": { "slug": { "type": "string", "default": "downtown-metreon" } } } },
-                { "name": "get_notice", "description": "Get current store notice for a HeyTea location slug", "inputSchema": { "type": "object", "properties": { "slug": { "type": "string", "default": "downtown-metreon" } } } },
-                { "name": "get_closing_notice", "description": "Get current closing notice for a HeyTea location slug", "inputSchema": { "type": "object", "properties": { "slug": { "type": "string", "default": "downtown-metreon" } } } },
-                { "name": "get_history", "description": "Get one-minute historical wait-time data for a HeyTea location slug", "inputSchema": { "type": "object", "properties": { "slug": { "type": "string", "default": "downtown-metreon" }, "range": { "type": "string", "enum": ["today", "1h", "6h", "24h", "7d"], "default": "today" } } } }
+                { "name": "get_status", "description": "Get current status for a HeyTea location slug", "inputSchema": { "type": "object", "required": ["slug"], "properties": { "slug": { "type": "string" } } } },
+                { "name": "get_wait_time", "description": "Get current wait time for a HeyTea location slug", "inputSchema": { "type": "object", "required": ["slug"], "properties": { "slug": { "type": "string" } } } },
+                { "name": "get_notice", "description": "Get current store notice for a HeyTea location slug", "inputSchema": { "type": "object", "required": ["slug"], "properties": { "slug": { "type": "string" } } } },
+                { "name": "get_closing_notice", "description": "Get current closing notice for a HeyTea location slug", "inputSchema": { "type": "object", "required": ["slug"], "properties": { "slug": { "type": "string" } } } },
+                { "name": "get_history", "description": "Get one-minute historical wait-time data for a HeyTea location slug", "inputSchema": { "type": "object", "required": ["slug"], "properties": { "slug": { "type": "string" }, "range": { "type": "string", "enum": ["today", "1h", "6h", "24h", "7d"], "default": "today" } } } }
             ]
         })),
         "tools/call" => {
@@ -212,7 +212,7 @@ async fn dispatch(state: &AppState, request: &JsonRpcRequest) -> Result<Value, R
                     .map_err(RpcError::internal)?
                 }
                 "get_status" => {
-                    let slug = slug_argument(arguments);
+                    let slug = slug_argument(arguments)?;
                     serde_json::to_value(
                         state
                             .client
@@ -223,7 +223,7 @@ async fn dispatch(state: &AppState, request: &JsonRpcRequest) -> Result<Value, R
                     .map_err(RpcError::internal)?
                 }
                 "get_wait_time" => {
-                    let slug = slug_argument(arguments);
+                    let slug = slug_argument(arguments)?;
                     serde_json::to_value(
                         state
                             .client
@@ -234,7 +234,7 @@ async fn dispatch(state: &AppState, request: &JsonRpcRequest) -> Result<Value, R
                     .map_err(RpcError::internal)?
                 }
                 "get_notice" => {
-                    let slug = slug_argument(arguments);
+                    let slug = slug_argument(arguments)?;
                     serde_json::to_value(
                         state
                             .client
@@ -245,7 +245,7 @@ async fn dispatch(state: &AppState, request: &JsonRpcRequest) -> Result<Value, R
                     .map_err(RpcError::internal)?
                 }
                 "get_closing_notice" => {
-                    let slug = slug_argument(arguments);
+                    let slug = slug_argument(arguments)?;
                     serde_json::to_value(
                         state
                             .client
@@ -256,7 +256,7 @@ async fn dispatch(state: &AppState, request: &JsonRpcRequest) -> Result<Value, R
                     .map_err(RpcError::internal)?
                 }
                 "get_history" => {
-                    let slug = slug_argument(arguments);
+                    let slug = slug_argument(arguments)?;
                     let range = arguments
                         .get("range")
                         .and_then(Value::as_str)

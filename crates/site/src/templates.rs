@@ -365,7 +365,7 @@ mod tests {
         let template = DashboardTemplate::new(
             Some(status),
             Some(history),
-            "https://api.heytea.dev/stream".to_string(),
+            "https://api.heytea.dev/locations/downtown-metreon/stream".to_string(),
             location,
         );
         let html = template.render().expect("render dashboard");

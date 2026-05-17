@@ -31,12 +31,6 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/locations/:slug/history", get(location_history))
         .route("/locations/:slug/stream", get(location_stream))
-        .route("/status", get(status))
-        .route("/wait-time", get(wait_time))
-        .route("/notice", get(notice))
-        .route("/closing-notice", get(closing_notice))
-        .route("/history", get(history))
-        .route("/stream", get(stream))
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/metrics", get(metrics))
@@ -127,66 +121,6 @@ pub(crate) async fn location_history(
         .map(|status| status.stale_after)
         .unwrap_or_else(|_| Utc::now());
     Ok((freshness_headers(stale_after), Json(history)))
-}
-
-#[utoipa::path(get, path = "/status", responses((status = 200, body = StatusResponse), (status = 503, body = ApiErrorBody)))]
-pub(crate) async fn status(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
-    let status = db::status(&state.pool).await?;
-    Ok((freshness_headers(status.stale_after), Json(status)))
-}
-
-#[utoipa::path(get, path = "/wait-time", responses((status = 200, body = WaitTimeResponse), (status = 503, body = ApiErrorBody)))]
-pub(crate) async fn wait_time(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, ApiError> {
-    let wait_time = db::wait_time(&state.pool).await?;
-    Ok((freshness_headers(wait_time.stale_after), Json(wait_time)))
-}
-
-#[utoipa::path(get, path = "/notice", responses((status = 200, body = NoticeResponse), (status = 503, body = ApiErrorBody)))]
-pub(crate) async fn notice(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
-    let notice = db::notice(&state.pool).await?;
-    let stale_after = notice
-        .observed_at
-        .map(db::stale_after)
-        .unwrap_or_else(Utc::now);
-    Ok((freshness_headers(stale_after), Json(notice)))
-}
-
-#[utoipa::path(get, path = "/closing-notice", responses((status = 200, body = ClosingNoticeResponse), (status = 503, body = ApiErrorBody)))]
-pub(crate) async fn closing_notice(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, ApiError> {
-    let closing_notice = db::closing_notice(&state.pool).await?;
-    let stale_after = closing_notice
-        .observed_at
-        .map(db::stale_after)
-        .unwrap_or_else(Utc::now);
-    Ok((freshness_headers(stale_after), Json(closing_notice)))
-}
-
-#[utoipa::path(get, path = "/history", params(HistoryQuery), responses((status = 200, body = HistoryResponse), (status = 400, body = ApiErrorBody)))]
-pub(crate) async fn history(
-    State(state): State<AppState>,
-    Query(query): Query<HistoryQuery>,
-) -> Result<impl IntoResponse, ApiError> {
-    let range = query
-        .range
-        .as_deref()
-        .unwrap_or("24h")
-        .parse::<HistoryRange>()
-        .map_err(ApiError::invalid)?;
-    let history = db::history(&state.pool, range).await?;
-    let stale_after = db::status(&state.pool)
-        .await
-        .map(|status| status.stale_after)
-        .unwrap_or_else(|_| Utc::now());
-    Ok((freshness_headers(stale_after), Json(history)))
-}
-
-#[utoipa::path(get, path = "/stream", responses((status = 200, description = "Server-sent status events")))]
-pub(crate) async fn stream(State(state): State<AppState>) -> impl IntoResponse {
-    stream_for_slug(state, db::DEFAULT_LOCATION_SLUG.to_string()).await
 }
 
 #[utoipa::path(get, path = "/locations/{slug}/stream", params(LocationPath), responses((status = 200, description = "Server-sent status events")))]

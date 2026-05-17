@@ -5,7 +5,6 @@ mod openapi;
 mod routes;
 
 use axum::Router;
-use heytea_core::StatusResponse;
 use sqlx::postgres::PgPoolOptions;
 use std::{env, net::SocketAddr, time::Duration};
 use tokio::sync::broadcast;
@@ -15,7 +14,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 #[derive(Clone)]
 pub struct AppState {
     pub pool: sqlx::PgPool,
-    pub status_events: broadcast::Sender<StatusResponse>,
+    pub status_events: broadcast::Sender<()>,
 }
 
 #[tokio::main]

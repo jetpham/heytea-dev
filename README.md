@@ -2,7 +2,7 @@
 
 Live wait-time and status dashboard for public HeyTea locations.
 
-The public API uses stable location slugs and never accepts or returns upstream shop IDs. Legacy singleton endpoints remain as aliases for `downtown-metreon`.
+The public API uses stable location slugs and never accepts or returns upstream shop IDs. Status, wait, notice, history, and stream endpoints require an explicit location slug.
 
 Live values are considered fresh until the next expected poll: `ttl_seconds = max(0, observed_at + poll_interval - now)`. Poller commits normalized data to Postgres, sends a Postgres notification, and the API broadcasts `status.updated` to connected SSE clients.
 
@@ -25,12 +25,6 @@ Live values are considered fresh until the next expected poll: `ttl_seconds = ma
 
 Base URL: `https://api.heytea.dev`
 
-- `GET /status`
-- `GET /wait-time`
-- `GET /notice`
-- `GET /closing-notice`
-- `GET /history?range=today`
-- `GET /stream`
 - `GET /locations`
 - `GET /locations/{slug}`
 - `GET /locations/{slug}/status`
@@ -44,7 +38,7 @@ Base URL: `https://api.heytea.dev`
 - `GET /metrics`
 - `GET /openapi.json`
 
-No `/v1`, no upstream shop IDs, and no menu endpoints.
+No `/v1`, no upstream shop IDs, no menu endpoints, and no default-location aliases.
 
 ## Local Development
 

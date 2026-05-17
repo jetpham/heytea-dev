@@ -7,8 +7,6 @@ use heytea_core::{
 };
 use sqlx::FromRow;
 
-pub const DEFAULT_LOCATION_SLUG: &str = "downtown-metreon";
-
 #[derive(Debug, FromRow)]
 struct LocationRow {
     slug: String,
@@ -176,10 +174,6 @@ async fn current_status_row(pool: &sqlx::PgPool, slug: &str) -> Result<CurrentSt
     }
 }
 
-pub async fn status(pool: &sqlx::PgPool) -> Result<StatusResponse, ApiError> {
-    status_for_slug(pool, DEFAULT_LOCATION_SLUG).await
-}
-
 pub async fn status_for_slug(pool: &sqlx::PgPool, slug: &str) -> Result<StatusResponse, ApiError> {
     let row = current_status_row(pool, slug).await?;
     Ok(StatusResponse {
@@ -200,10 +194,6 @@ pub async fn status_for_slug(pool: &sqlx::PgPool, slug: &str) -> Result<StatusRe
     })
 }
 
-pub async fn wait_time(pool: &sqlx::PgPool) -> Result<WaitTimeResponse, ApiError> {
-    wait_time_for_slug(pool, DEFAULT_LOCATION_SLUG).await
-}
-
 pub async fn wait_time_for_slug(
     pool: &sqlx::PgPool,
     slug: &str,
@@ -222,10 +212,6 @@ pub async fn wait_time_for_slug(
     })
 }
 
-pub async fn notice(pool: &sqlx::PgPool) -> Result<NoticeResponse, ApiError> {
-    notice_for_slug(pool, DEFAULT_LOCATION_SLUG).await
-}
-
 pub async fn notice_for_slug(pool: &sqlx::PgPool, slug: &str) -> Result<NoticeResponse, ApiError> {
     let row = current_status_row(pool, slug).await?;
     Ok(NoticeResponse {
@@ -233,10 +219,6 @@ pub async fn notice_for_slug(pool: &sqlx::PgPool, slug: &str) -> Result<NoticeRe
         observed_at: row.notices_observed_at,
         stale: row.notices_observed_at.map(is_stale).unwrap_or(true),
     })
-}
-
-pub async fn closing_notice(pool: &sqlx::PgPool) -> Result<ClosingNoticeResponse, ApiError> {
-    closing_notice_for_slug(pool, DEFAULT_LOCATION_SLUG).await
 }
 
 pub async fn closing_notice_for_slug(
@@ -280,13 +262,6 @@ struct HistoryPointRow {
     avg_making_cups: Option<f64>,
     avg_making_orders: Option<f64>,
     sample_count: i64,
-}
-
-pub async fn history(
-    pool: &sqlx::PgPool,
-    range: HistoryRange,
-) -> Result<HistoryResponse, ApiError> {
-    history_for_slug(pool, DEFAULT_LOCATION_SLUG, range).await
 }
 
 pub async fn history_for_slug(
