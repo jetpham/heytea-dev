@@ -30,6 +30,7 @@ With the default 60 second poll interval, data observed 30 seconds ago has 30 se
 - `heytea-site`: Axum + Askama server-rendered location finder, optimized location pages, status page, docs shell, and discovery routes. Vite builds generic docs/status browser assets.
 - `heytea-poller`: refreshes the location catalog daily, polls wait times every minute, polls provider-supported current notices every minute, persists normalized state in bulk, then publishes a Postgres notification after commit.
 - `heytea-mcp`: public anonymous HTTP MCP endpoint backed by the local API.
+- `heytea-ssh-tui`: public anonymous readonly SSH interface backed by the local API.
 - `postgres`: canonical state and Timescale history.
-- `umami`: self-hosted analytics backed by Postgres.
-- `prometheus`, `blackbox_exporter`, `loki`, `grafana`, `otel-collector`: observability.
+- `caddy`: public HTTP/1.1, HTTP/2, HTTP/3/QUIC, TLS, and reverse proxy.
+- `tailscaled` and `openssh`: admin deploy path over Tailscale only.

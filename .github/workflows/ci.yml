@@ -36,4 +36,4 @@ jobs:
       - name: Diff hygiene
         run: git diff --check
       - name: Build packages
-        run: nix --accept-flake-config build .#heytea-api .#heytea-poller .#heytea-mcp .#heytea-cli .#heytea-assets .#heytea-site-assets .#heytea-site .#heytea-migrations --no-link
+        run: nix --accept-flake-config build .#heytea-api .#heytea-poller .#heytea-mcp .#heytea-ssh-tui .#heytea-cli .#heytea-assets .#heytea-site-assets .#heytea-site .#heytea-migrations --no-link

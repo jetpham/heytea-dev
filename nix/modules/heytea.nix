@@ -3,6 +3,37 @@
 let
   cfg = config.services.heytea;
   inherit (lib) mkEnableOption mkIf mkOption types;
+  cloudflareCidrs = [
+    "173.245.48.0/20"
+    "103.21.244.0/22"
+    "103.22.200.0/22"
+    "103.31.4.0/22"
+    "141.101.64.0/18"
+    "108.162.192.0/18"
+    "190.93.240.0/20"
+    "188.114.96.0/20"
+    "197.234.240.0/22"
+    "198.41.128.0/17"
+    "162.158.0.0/15"
+    "104.16.0.0/13"
+    "104.24.0.0/14"
+    "172.64.0.0/13"
+    "131.0.72.0/22"
+    "2400:cb00::/32"
+    "2606:4700::/32"
+    "2803:f800::/32"
+    "2405:b500::/32"
+    "2405:8100::/32"
+    "2a06:98c0::/29"
+    "2c0f:f248::/32"
+  ];
+  cloudflareTrustedProxies = lib.concatStringsSep " " cloudflareCidrs;
+  sitePreamble = ''
+    encode zstd gzip
+    tls {
+      protocols tls1.2 tls1.3
+    }
+  '';
   placeholder = name: pkgs.writeShellScriptBin name ''
     echo "${name} package has not been wired into the Nix build yet" >&2
     exit 1
@@ -20,11 +51,10 @@ in
     docsDomain = mkOption { type = types.str; default = "docs.heytea.dev"; };
     mcpDomain = mkOption { type = types.str; default = "mcp.heytea.dev"; };
     statusDomain = mkOption { type = types.str; default = "status.heytea.dev"; };
-    analyticsDomain = mkOption { type = types.str; default = "analytics.heytea.dev"; };
-    shopConfigPath = mkOption { type = types.str; default = "/etc/heytea/shop-id"; };
     apiPackage = mkOption { type = types.package; default = placeholder "heytea-api"; };
     pollerPackage = mkOption { type = types.package; default = placeholder "heytea-poller"; };
     mcpPackage = mkOption { type = types.package; default = placeholder "heytea-mcp"; };
+    sshTuiPackage = mkOption { type = types.package; default = placeholder "heytea-ssh-tui"; };
     sitePackage = mkOption { type = types.package; default = placeholder "heytea-site"; };
     migrationsPackage = mkOption { type = types.package; default = migrationsPlaceholder; };
   };
@@ -39,7 +69,20 @@ in
     services.postgresql = {
       enable = true;
       package = pkgs.postgresql_16.withPackages (ps: [ ps.timescaledb ]);
-      settings.shared_preload_libraries = "timescaledb";
+      settings = {
+        shared_preload_libraries = "timescaledb";
+        max_connections = lib.mkDefault 16;
+        shared_buffers = lib.mkDefault "64MB";
+        effective_cache_size = lib.mkDefault "256MB";
+        maintenance_work_mem = lib.mkDefault "32MB";
+        work_mem = lib.mkDefault "1MB";
+        wal_buffers = lib.mkDefault "4MB";
+        autovacuum_max_workers = lib.mkDefault 1;
+        max_worker_processes = lib.mkDefault 4;
+        max_parallel_workers = lib.mkDefault 0;
+        max_parallel_workers_per_gather = lib.mkDefault 0;
+        "timescaledb.max_background_workers" = lib.mkDefault 2;
+      };
       authentication = lib.mkForce ''
         local all all peer
         host all all 127.0.0.1/32 reject
@@ -96,6 +139,7 @@ in
       environment = {
         DATABASE_URL = "postgresql:///heytea?host=/run/postgresql&user=heytea";
         HEYTEA_API_BIND = "127.0.0.1:3000";
+        HEYTEA_API_MAX_CONNECTIONS = "4";
         RUST_LOG = "info";
       };
     };
@@ -114,7 +158,8 @@ in
         DATABASE_URL = "postgresql:///heytea?host=/run/postgresql&user=heytea";
         HEYTEA_POLLER_INTERVAL_SECONDS = "60";
         HEYTEA_CATALOG_INTERVAL_SECONDS = "86400";
-        HEYTEA_UPSTREAM_CONCURRENCY = "16";
+        HEYTEA_POLLER_MAX_CONNECTIONS = "2";
+        HEYTEA_UPSTREAM_CONCURRENCY = "6";
         RUST_LOG = "info";
       };
     };
@@ -145,141 +190,110 @@ in
       environment = {
         HEYTEA_SITE_BIND = "127.0.0.1:3100";
         HEYTEA_API_URL = "http://127.0.0.1:3000";
+        HEYTEA_MCP_URL = "http://127.0.0.1:3001";
         HEYTEA_PUBLIC_API_URL = "https://${cfg.apiDomain}";
-        HEYTEA_PROMETHEUS_URL = "http://127.0.0.1:9090";
+      };
+    };
+
+    systemd.services.heytea-ssh-tui = {
+      wantedBy = [ "multi-user.target" ];
+      wants = [ "network-online.target" ];
+      after = [ "network-online.target" "heytea-api.service" ];
+      preStart = ''
+        key=/var/lib/heytea-ssh-tui/ssh_host_ed25519_key
+        if [ ! -s "$key" ]; then
+          rm -f "$key" "$key.pub"
+          ${pkgs.openssh}/bin/ssh-keygen -q -t ed25519 -N "" -f "$key"
+        fi
+        ${pkgs.coreutils}/bin/chmod 0600 "$key"
+      '';
+      serviceConfig = {
+        ExecStart = "${cfg.sshTuiPackage}/bin/heytea-ssh-tui";
+        Restart = "always";
+        DynamicUser = true;
+        StateDirectory = "heytea-ssh-tui";
+        AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
+        CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
+        LimitNOFILE = 256;
+        TasksMax = 64;
+        MemoryMax = "96M";
+      };
+      environment = {
+        HEYTEA_API_URL = "http://127.0.0.1:3000";
+        HEYTEA_SSH_TUI_BIND = "[::]:22";
+        HEYTEA_SSH_TUI_HOST_KEY = "/var/lib/heytea-ssh-tui/ssh_host_ed25519_key";
+        HEYTEA_SSH_TUI_MAX_SESSIONS = "8";
+        HEYTEA_SSH_TUI_REFRESH_SECONDS = "15";
+        RUST_LOG = "info";
       };
     };
 
     services.caddy = {
       enable = true;
-      virtualHosts.${cfg.domain}.extraConfig = ''
-        encode {
-          zstd best
-          gzip 9
+      globalConfig = ''
+        servers {
+          protocols h1 h2 h3
+          trusted_proxies static ${cloudflareTrustedProxies}
+          trusted_proxies_strict
         }
-        handle /openapi.json {
+      '';
+      virtualHosts = {
+        ${cfg.domain}.extraConfig = ''
+          ${sitePreamble}
+          handle /openapi.json {
+            reverse_proxy 127.0.0.1:3000
+          }
+          handle /mcp* {
+            reverse_proxy 127.0.0.1:3001
+          }
+          handle /assets/* {
+            header Cache-Control "public, max-age=31536000, immutable"
+            reverse_proxy 127.0.0.1:3100
+          }
+          handle /a.woff2 {
+            header Cache-Control "public, max-age=31536000, immutable"
+            reverse_proxy 127.0.0.1:3100
+          }
+          handle {
+            reverse_proxy 127.0.0.1:3100
+          }
+        '';
+        ${cfg.apiDomain}.extraConfig = ''
+          ${sitePreamble}
           reverse_proxy 127.0.0.1:3000
-        }
-        handle /mcp* {
+        '';
+        ${cfg.docsDomain}.extraConfig = ''
+          ${sitePreamble}
+          handle /openapi.json {
+            reverse_proxy 127.0.0.1:3000
+          }
+          handle / {
+            rewrite * /docs
+            reverse_proxy 127.0.0.1:3100
+          }
+          handle {
+            reverse_proxy 127.0.0.1:3100
+          }
+        '';
+        ${cfg.statusDomain}.extraConfig = ''
+          ${sitePreamble}
+          handle / {
+            rewrite * /status
+            reverse_proxy 127.0.0.1:3100
+          }
+          handle {
+            reverse_proxy 127.0.0.1:3100
+          }
+        '';
+        ${cfg.mcpDomain}.extraConfig = ''
+          ${sitePreamble}
           reverse_proxy 127.0.0.1:3001
-        }
-        handle /assets/* {
-          header Cache-Control "public, max-age=31536000, immutable"
-          reverse_proxy 127.0.0.1:3100
-        }
-        handle /a.woff2 {
-          header Cache-Control "public, max-age=31536000, immutable"
-          reverse_proxy 127.0.0.1:3100
-        }
-        handle {
-          reverse_proxy 127.0.0.1:3100
-        }
-      '';
-      virtualHosts.${cfg.apiDomain}.extraConfig = ''
-        encode {
-          zstd best
-          gzip 9
-        }
-        reverse_proxy 127.0.0.1:3000
-      '';
-      virtualHosts.${cfg.docsDomain}.extraConfig = ''
-        encode {
-          zstd best
-          gzip 9
-        }
-        handle /openapi.json {
-          reverse_proxy 127.0.0.1:3000
-        }
-        handle / {
-          rewrite * /docs
-          reverse_proxy 127.0.0.1:3100
-        }
-        handle {
-          reverse_proxy 127.0.0.1:3100
-        }
-      '';
-      virtualHosts.${cfg.mcpDomain}.extraConfig = ''
-        encode {
-          zstd best
-          gzip 9
-        }
-        reverse_proxy 127.0.0.1:3001
-      '';
-      virtualHosts.${cfg.statusDomain}.extraConfig = ''
-        encode {
-          zstd best
-          gzip 9
-        }
-        handle / {
-          rewrite * /status
-          reverse_proxy 127.0.0.1:3100
-        }
-        handle {
-          reverse_proxy 127.0.0.1:3100
-        }
-      '';
-      virtualHosts.${cfg.analyticsDomain}.extraConfig = ''
-        encode {
-          zstd best
-          gzip 9
-        }
-        reverse_proxy 127.0.0.1:3003
-      '';
-    };
-
-    services.prometheus = {
-      enable = true;
-      port = 9090;
-      exporters.node.enable = true;
-      scrapeConfigs = [
-        {
-          job_name = "heytea-api";
-          static_configs = [{ targets = [ "127.0.0.1:3000" ]; }];
-          metrics_path = "/metrics";
-        }
-        {
-          job_name = "blackbox-public";
-          metrics_path = "/probe";
-          params.module = [ "http_2xx" ];
-          static_configs = [{
-            targets = [
-              "https://${cfg.domain}"
-              "https://${cfg.apiDomain}/healthz"
-              "https://${cfg.apiDomain}/readyz"
-              "https://${cfg.docsDomain}"
-              "https://${cfg.mcpDomain}"
-              "https://${cfg.statusDomain}"
-            ];
-          }];
-          relabel_configs = [
-            { source_labels = [ "__address__" ]; target_label = "__param_target"; }
-            { source_labels = [ "__param_target" ]; target_label = "instance"; }
-            { target_label = "__address__"; replacement = "127.0.0.1:9115"; }
-          ];
-        }
-      ];
-    };
-
-    services.prometheus.exporters.blackbox = {
-      enable = true;
-      port = 9115;
-      configFile = pkgs.writeText "blackbox.yml" ''
-        modules:
-          http_2xx:
-            prober: http
-            timeout: 5s
-            http:
-              valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
-              follow_redirects: true
-      '';
-    };
-
-    services.grafana = {
-      enable = true;
-      settings.server = {
-        http_addr = "127.0.0.1";
-        http_port = 3002;
-        domain = "grafana.heytea.dev";
+        '';
       };
     };
   };

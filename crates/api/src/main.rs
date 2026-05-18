@@ -27,10 +27,11 @@ async fn main() -> anyhow::Result<()> {
     let database_url = env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://heytea:heytea@localhost:5432/heytea".to_string());
     let bind = env::var("HEYTEA_API_BIND").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+    let max_connections = env_u32("HEYTEA_API_MAX_CONNECTIONS", 10);
     let addr: SocketAddr = bind.parse()?;
 
     let pool = PgPoolOptions::new()
-        .max_connections(10)
+        .max_connections(max_connections)
         .acquire_timeout(Duration::from_secs(5))
         .connect(&database_url)
         .await?;
@@ -54,4 +55,12 @@ pub fn app(state: AppState) -> Router {
         .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
+}
+
+fn env_u32(name: &str, default: u32) -> u32 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
 }

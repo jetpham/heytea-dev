@@ -23,7 +23,7 @@
 </head>
 <body>
   <nav aria-label="main">
-    <span id="nav-status">{{ nav_status }}</span>
+    <a class="brand" href="https://heytea.dev/">heytea.dev</a>
     <span class="links">
       <a href="https://docs.heytea.dev/">docs</a>
       <a href="https://status.heytea.dev/">status</a>
@@ -39,7 +39,8 @@
   </main>
   <footer>
     <span>made by <a href="https://jetpham.com">jet</a></span>
-    <a href="https://github.com/jetpham/heytea-dev">source code</a>
+    {% if evil %}<span class="evil">i know you're evil</span>{% else %}<span class="evil" aria-hidden="true"></span>{% endif %}
+    <a class="source" href="https://github.com/jetpham/heytea-dev">source code</a>
   </footer>
   <script>{{ inline_js|safe }}</script>
 </body>

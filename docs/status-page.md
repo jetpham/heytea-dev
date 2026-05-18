@@ -1,15 +1,13 @@
 # status.heytea.dev
 
-`status.heytea.dev` shows public uptime and latency for public services.
+`status.heytea.dev` shows live health and latency checks for public services.
 
-Public probes:
+Live checks:
 
 - `https://heytea.dev`
 - `https://api.heytea.dev/healthz`
 - `https://api.heytea.dev/readyz`
-- `https://docs.heytea.dev`
+- `https://api.heytea.dev/locations`
 - `https://mcp.heytea.dev`
-- `https://analytics.heytea.dev`
-- `https://status.heytea.dev`
 
-The status page should expose sanitized uptime/latency summaries, not raw Prometheus.
+The status page performs live checks from the site process. It does not require time-series monitoring storage.

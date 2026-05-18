@@ -37,9 +37,10 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_UPSTREAM_CONCURRENCY);
+    let max_connections = env_u32("HEYTEA_POLLER_MAX_CONNECTIONS", 5);
 
     let pool = PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(max_connections)
         .connect(&database_url)
         .await
         .context("failed to connect to postgres")?;
@@ -49,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         interval,
         catalog_interval,
         upstream_concurrency,
+        max_connections,
         "starting heytea poller"
     );
 
@@ -256,4 +258,12 @@ async fn publish_status_updated(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+fn env_u32(name: &str, default: u32) -> u32 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
 }

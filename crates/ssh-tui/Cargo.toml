@@ -1,0 +1,17 @@
+[package]
+name = "heytea-ssh-tui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Anonymous readonly SSH TUI for heytea.dev"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+heytea = { path = "../sdk" }
+russh.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

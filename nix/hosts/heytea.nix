@@ -1,11 +1,7 @@
 { config, pkgs, lib, modulesPath, ... }:
 
 let
-  hasGrafanaSecret = builtins.pathExists ../../secrets/grafana-secret-key.age;
-  hasGrafanaAdminPassword = builtins.pathExists ../../secrets/grafana-admin-password.age;
-  hasGrafanaSecrets = hasGrafanaSecret && hasGrafanaAdminPassword;
   hasTailscaleAuthKey = builtins.pathExists ../../secrets/tailscale-auth-key.age;
-  hasUmamiAppSecret = builtins.pathExists ../../secrets/umami-app-secret.age;
 in
 
 {
@@ -16,8 +12,28 @@ in
   networking.hostName = "heytea-dev";
   time.timeZone = "America/Los_Angeles";
 
-  nix.settings.experimental-features = [ "nix-command" "flakes" ];
+  nix = {
+    settings = {
+      experimental-features = [ "nix-command" "flakes" ];
+      auto-optimise-store = true;
+    };
+    gc = {
+      automatic = true;
+      dates = "daily";
+      options = "--delete-older-than 3d";
+    };
+  };
   nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [ "timescaledb" ];
+  boot.kernel.sysctl."net.ipv6.bindv6only" = 0;
+  zramSwap = {
+    enable = true;
+    memoryPercent = 100;
+  };
+  services.do-agent.enable = false;
+  services.journald.extraConfig = ''
+    SystemMaxUse=64M
+    MaxRetentionSec=7day
+  '';
 
   # DigitalOcean provides interface config through cloud-init; DHCP-only
   # networking can leave nixos-anywhere installs unreachable after reboot.
@@ -35,6 +51,8 @@ in
 
   services.openssh = {
     enable = true;
+    openFirewall = false;
+    ports = [ 2222 ];
     hostKeys = [
       {
         path = "/etc/ssh/ssh_host_ed25519_key";
@@ -42,8 +60,11 @@ in
       }
     ];
     settings = {
+      AllowAgentForwarding = false;
+      AllowTcpForwarding = false;
       PasswordAuthentication = false;
       PermitRootLogin = "prohibit-password";
+      X11Forwarding = false;
     };
   };
 
@@ -54,6 +75,7 @@ in
 
   boot.loader.grub.enable = lib.mkDefault true;
   boot.loader.grub.devices = lib.mkDefault [ "/dev/vda" ];
+  boot.loader.grub.configurationLimit = lib.mkDefault 3;
 
   fileSystems."/" = lib.mkDefault {
     device = "/dev/disk/by-label/nixos";
@@ -61,39 +83,10 @@ in
   };
 
   age.secrets = lib.mkMerge [
-    (lib.optionalAttrs hasGrafanaSecret {
-      grafana-secret-key = {
-        file = ../../secrets/grafana-secret-key.age;
-        owner = "grafana";
-      };
-    })
-    (lib.optionalAttrs hasGrafanaAdminPassword {
-      grafana-admin-password = {
-        file = ../../secrets/grafana-admin-password.age;
-        owner = "grafana";
-      };
-    })
     (lib.optionalAttrs hasTailscaleAuthKey {
       tailscale-auth-key.file = ../../secrets/tailscale-auth-key.age;
     })
-    (lib.optionalAttrs hasUmamiAppSecret {
-      umami-app-secret.file = ../../secrets/umami-app-secret.age;
-    })
   ];
-
-  services.grafana.enable = lib.mkIf (!hasGrafanaSecrets) (lib.mkForce false);
-  services.grafana.settings.security.secret_key = lib.mkIf hasGrafanaSecret "$__file{/run/agenix/grafana-secret-key}";
-  services.grafana.settings.security.admin_password = lib.mkIf hasGrafanaAdminPassword "$__file{/run/agenix/grafana-admin-password}";
-
-  services.umami = lib.mkIf hasUmamiAppSecret {
-    enable = true;
-    settings = {
-      APP_SECRET_FILE = config.age.secrets.umami-app-secret.path;
-      HOSTNAME = "127.0.0.1";
-      PORT = 3003;
-      DISABLE_TELEMETRY = true;
-    };
-  };
 
   services.heytea = {
     enable = true;
@@ -102,8 +95,6 @@ in
     docsDomain = "docs.heytea.dev";
     mcpDomain = "mcp.heytea.dev";
     statusDomain = "status.heytea.dev";
-    analyticsDomain = "analytics.heytea.dev";
-    shopConfigPath = "/etc/heytea/shop-id";
   };
 
   services.tailscale.enable = true;
@@ -132,6 +123,7 @@ in
   networking.firewall = {
     enable = true;
     allowedTCPPorts = [ 22 80 443 ];
+    allowedUDPPorts = [ 443 ];
     trustedInterfaces = [ "tailscale0" ];
   };
 

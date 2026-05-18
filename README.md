@@ -11,13 +11,13 @@ Live values are considered fresh until the next expected poll: `ttl_seconds = ma
 - Rust API with Axum, sqlx, and utoipa OpenAPI
 - Rust poller service for HeyTea public app endpoints
 - Public anonymous HTTP MCP server
+- Public anonymous readonly SSH TUI server for `ssh heytea.dev`
 - Rust SDK crate and CLI binary named `heytea`
 - Rust/Axum + Askama server-rendered dashboard, docs, and status pages
 - Vite-built browser assets for tiny SSE updates and Swagger UI docs
 - Postgres + TimescaleDB for canonical state and history
 - Postgres notifications for live SSE fanout; no Redis cache
-- NixOS, Caddy, deploy-rs, agenix
-- Umami analytics, Prometheus, Loki, Grafana, OpenTelemetry, blackbox_exporter
+- NixOS, Caddy, deploy-rs, agenix, Tailscale admin access
 - Daily Backblaze B2 backups via restic
 
 ## Public API
@@ -45,7 +45,7 @@ No `/v1`, no upstream shop IDs, no menu endpoints, and no default-location alias
 nix develop
 cargo check
 pnpm build
-nix build .#heytea-api .#heytea-poller .#heytea-mcp .#heytea-cli .#heytea-assets .#heytea-site-assets .#heytea-site .#heytea-migrations --no-link
+nix build .#heytea-api .#heytea-poller .#heytea-mcp .#heytea-ssh-tui .#heytea-cli .#heytea-assets .#heytea-site-assets .#heytea-site .#heytea-migrations --no-link
 ```
 
 ## CI/CD

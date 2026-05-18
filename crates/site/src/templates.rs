@@ -17,7 +17,6 @@ const FAVICON_SVG: &str = include_str!("../templates/heyteafavi.svg");
 pub(crate) struct DashboardView {
     pub(crate) closed: bool,
     pub(crate) open: bool,
-    pub(crate) nav_status: String,
     pub(crate) status_line: String,
     pub(crate) wait_minutes: i32,
     pub(crate) observed_at: String,
@@ -68,7 +67,6 @@ impl DashboardView {
             .unwrap_or_default();
         let closed = status.and_then(|status| status.is_open) != Some(true);
         let open = !closed;
-        let nav_status = format!("heytea is {}", if closed { "closed" } else { "open" });
         let wait_minutes = status
             .and_then(|status| status.pickup_wait_minutes)
             .unwrap_or_default();
@@ -91,7 +89,6 @@ impl DashboardView {
         Self {
             closed,
             open,
-            nav_status,
             status_line,
             wait_minutes,
             observed_at,
@@ -112,9 +109,9 @@ pub struct DashboardTemplate {
     pub favicon_href: String,
     pub inline_css: String,
     pub inline_js: &'static str,
+    pub evil: bool,
     pub closed: bool,
     pub open: bool,
-    pub nav_status: String,
     pub status_line: String,
     pub wait_minutes: i32,
     pub observed_at: String,
@@ -129,6 +126,7 @@ impl DashboardTemplate {
         history: Option<HistoryResponse>,
         stream_url: String,
         location: LocationResponse,
+        evil: bool,
     ) -> Self {
         let view = DashboardView::new(
             status.as_ref(),
@@ -145,9 +143,9 @@ impl DashboardTemplate {
             favicon_href: svg_data_uri(&favicon_svg()),
             inline_css: dashboard_css(),
             inline_js: DASHBOARD_JS,
+            evil,
             closed: view.closed,
             open: view.open,
-            nav_status: view.nav_status,
             status_line: view.status_line,
             wait_minutes: view.wait_minutes,
             observed_at: view.observed_at,
@@ -165,14 +163,16 @@ pub struct FinderTemplate {
     pub inline_css: String,
     pub inline_js: &'static str,
     pub locations_json: String,
+    pub evil: bool,
 }
 
 impl FinderTemplate {
-    pub fn new(locations: Option<LocationsResponse>) -> Self {
+    pub fn new(locations: Option<LocationsResponse>, evil: bool) -> Self {
         Self {
             favicon_href: svg_data_uri(&favicon_svg()),
             inline_css: dashboard_css(),
             inline_js: FINDER_JS,
+            evil,
             locations_json: safe_json(&locations.unwrap_or_else(|| LocationsResponse {
                 generated_at: Utc::now(),
                 locations: Vec::new(),
@@ -367,6 +367,7 @@ mod tests {
             Some(history),
             "https://api.heytea.dev/locations/downtown-metreon/stream".to_string(),
             location,
+            false,
         );
         let html = template.render().expect("render dashboard");
         assert!(html.len() < 40 * 1024);
@@ -382,5 +383,18 @@ mod tests {
         assert!(!html.contains("/a.woff2"));
         assert!(!html.contains("/icon.svg"));
         assert!(!html.contains("rel=\"manifest\""));
+    }
+
+    #[test]
+    fn evil_footer_is_conditional() {
+        let evil = FinderTemplate::new(None, true)
+            .render()
+            .expect("render finder");
+        let normal = FinderTemplate::new(None, false)
+            .render()
+            .expect("render finder");
+
+        assert!(evil.contains("i know you're evil"));
+        assert!(!normal.contains("i know you're evil"));
     }
 }

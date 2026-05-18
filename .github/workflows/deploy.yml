@@ -43,6 +43,7 @@ jobs:
           cat > ~/.ssh/config <<'EOF'
           Host heytea-dev
             User root
+            Port 2222
             StrictHostKeyChecking accept-new
           EOF
       - name: Deploy NixOS

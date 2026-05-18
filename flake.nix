@@ -162,6 +162,7 @@
             heytea-api = rustBinary { package = "heytea-api"; };
             heytea-poller = rustBinary { package = "heytea-poller"; };
             heytea-mcp = rustBinary { package = "heytea-mcp"; };
+            heytea-ssh-tui = rustBinary { package = "heytea-ssh-tui"; };
             heytea-cli = rustBinary { package = "heytea-cli"; };
             heytea-site-assets = siteAssets;
             heytea-site = site;
@@ -249,6 +250,7 @@
               apiPackage = self.packages.${serverSystem}.heytea-api;
               pollerPackage = self.packages.${serverSystem}.heytea-poller;
               mcpPackage = self.packages.${serverSystem}.heytea-mcp;
+              sshTuiPackage = self.packages.${serverSystem}.heytea-ssh-tui;
               sitePackage = self.packages.${serverSystem}.heytea-site;
               migrationsPackage = self.packages.${serverSystem}.heytea-migrations;
             };
@@ -261,6 +263,7 @@
       deploy.nodes."heytea-dev" = {
         hostname = "heytea-dev";
         sshUser = "root";
+        sshOpts = [ "-p" "2222" ];
         profiles.system = {
           user = "root";
           path = deploy-rs.lib.x86_64-linux.activate.nixos self.nixosConfigurations.heytea-dev;

@@ -11,9 +11,9 @@ use chrono::Utc;
 use heytea_core::{
     HistoryResponse, LocationPath, LocationResponse, LocationsResponse, StatusResponse,
 };
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::de::DeserializeOwned;
 use serde_json::json;
-use std::collections::{BTreeSet, HashMap};
+use std::time::Instant;
 use tower_http::services::{ServeDir, ServeFile};
 
 pub fn router(state: AppState) -> Router {
@@ -68,7 +68,7 @@ async fn finder(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
     }
 
     let locations = api_json::<LocationsResponse>(&state, "/locations").await;
-    let template = templates::FinderTemplate::new(locations);
+    let template = templates::FinderTemplate::new(locations, evil_request(&headers));
     Ok((html_shell_headers(""), Html(template.render()?)).into_response())
 }
 
@@ -86,6 +86,7 @@ async fn location_dashboard(
         };
     }
 
+    let evil = evil_request(&headers);
     let location_path = format!("/locations/{}", path.slug);
     let Some(location) = api_json::<LocationResponse>(&state, &location_path).await else {
         return Ok(not_found(headers).await);
@@ -101,33 +102,57 @@ async fn location_dashboard(
         state.public_api_url.trim_end_matches('/'),
         path.slug
     );
-    let template = templates::DashboardTemplate::new(status, history, stream_url.clone(), location);
+    let template =
+        templates::DashboardTemplate::new(status, history, stream_url.clone(), location, evil);
     Ok((html_shell_headers(&stream_url), Html(template.render()?)).into_response())
 }
 
 async fn status(State(state): State<AppState>) -> Result<Response, SiteError> {
-    let (success, uptime, latency) = tokio::join!(
-        prometheus_query(&state, r#"probe_success{job="blackbox-public"}"#),
-        prometheus_query(
+    let (health, readiness, locations, mcp) = tokio::join!(
+        live_component(
             &state,
-            r#"avg_over_time(probe_success{job="blackbox-public"}[24h]) * 100"#
+            "API health",
+            "https://api.heytea.dev/healthz",
+            "api",
+            "/healthz"
         ),
-        prometheus_query(
+        live_component(
             &state,
-            r#"probe_duration_seconds{job="blackbox-public"} * 1000"#
-        )
+            "API readiness",
+            "https://api.heytea.dev/readyz",
+            "api",
+            "/readyz"
+        ),
+        live_component(
+            &state,
+            "Location catalog",
+            "https://api.heytea.dev/locations",
+            "api",
+            "/locations"
+        ),
+        live_component(&state, "MCP", "https://mcp.heytea.dev/mcp", "mcp", "/mcp"),
     );
-    let components = status_components(success, uptime, latency);
-    let all_operational = !components.is_empty()
-        && components
-            .iter()
-            .all(|component| component.class_name == "ok");
+    let components = vec![
+        templates::StatusComponent {
+            name: "Website".to_string(),
+            target: "https://heytea.dev".to_string(),
+            state: "Operational".to_string(),
+            class_name: "ok".to_string(),
+            uptime: "live".to_string(),
+            latency: "current request".to_string(),
+        },
+        health,
+        readiness,
+        locations,
+        mcp,
+    ];
+    let all_operational = components
+        .iter()
+        .all(|component| component.class_name == "ok");
     let template = templates::StatusTemplate {
         assets: state.assets.tags("src/status.ts", false),
         summary: if all_operational {
             "All systems operational"
-        } else if components.is_empty() {
-            "Monitoring unavailable"
         } else {
             "Some systems degraded"
         }
@@ -337,130 +362,34 @@ pub struct ApiCheck<T> {
     pub value: Option<T>,
 }
 
-type ProbeValues = HashMap<String, f64>;
-
-#[derive(Debug, Deserialize)]
-struct PrometheusResponse {
-    status: String,
-    data: PrometheusData,
-}
-
-#[derive(Debug, Deserialize)]
-struct PrometheusData {
-    result: Vec<PrometheusResult>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PrometheusResult {
-    metric: HashMap<String, String>,
-    value: (f64, String),
-}
-
-async fn prometheus_query(state: &AppState, query: &str) -> ProbeValues {
-    let url = format!(
-        "{}/api/v1/query",
-        state.prometheus_url.trim_end_matches('/')
-    );
-    let response = match state
-        .client
-        .get(url)
-        .query(&[("query", query)])
-        .send()
-        .await
-    {
-        Ok(response) => response,
+async fn live_component(
+    state: &AppState,
+    name: &str,
+    public_target: &str,
+    service: &str,
+    path: &str,
+) -> templates::StatusComponent {
+    let base_url = match service {
+        "mcp" => &state.mcp_url,
+        _ => &state.api_url,
+    };
+    let url = format!("{}{}", base_url.trim_end_matches('/'), path);
+    let start = Instant::now();
+    let ok = match state.client.get(url).send().await {
+        Ok(response) => response.status().is_success(),
         Err(error) => {
-            tracing::warn!(?error, query, "prometheus query failed");
-            return HashMap::new();
+            tracing::warn!(?error, service, path, "status live check failed");
+            false
         }
     };
-    let body = match response.json::<PrometheusResponse>().await {
-        Ok(body) if body.status == "success" => body,
-        Ok(body) => {
-            tracing::warn!(status = %body.status, query, "prometheus query returned non-success");
-            return HashMap::new();
-        }
-        Err(error) => {
-            tracing::warn!(?error, query, "prometheus response decode failed");
-            return HashMap::new();
-        }
-    };
-    body.data
-        .result
-        .into_iter()
-        .filter_map(|result| {
-            let target = result.metric.get("instance")?.to_string();
-            let value = result.value.1.parse::<f64>().ok()?;
-            Some((target, value))
-        })
-        .collect()
-}
-
-fn status_components(
-    success: ProbeValues,
-    uptime: ProbeValues,
-    latency: ProbeValues,
-) -> Vec<templates::StatusComponent> {
-    let mut targets = BTreeSet::new();
-    targets.extend(success.keys().cloned());
-    targets.extend(uptime.keys().cloned());
-    targets.extend(latency.keys().cloned());
-
-    let preferred = [
-        "https://heytea.dev",
-        "https://api.heytea.dev/healthz",
-        "https://api.heytea.dev/readyz",
-        "https://docs.heytea.dev",
-        "https://mcp.heytea.dev",
-        "https://status.heytea.dev",
-    ];
-    let mut ordered = Vec::new();
-    for target in preferred {
-        if targets.remove(target) {
-            ordered.push(target.to_string());
-        }
-    }
-    ordered.extend(targets);
-
-    ordered
-        .into_iter()
-        .map(|target| {
-            let up = success.get(&target).copied();
-            let ok = up.map(|value| value >= 1.0).unwrap_or(false);
-            templates::StatusComponent {
-                name: component_name(&target).to_string(),
-                target: target.clone(),
-                state: if ok {
-                    "Operational"
-                } else if up.is_some() {
-                    "Degraded"
-                } else {
-                    "Unknown"
-                }
-                .to_string(),
-                class_name: if ok { "ok" } else { "bad" }.to_string(),
-                uptime: uptime
-                    .get(&target)
-                    .map(|value| format!("{value:.2}%"))
-                    .unwrap_or_else(|| "unknown".to_string()),
-                latency: latency
-                    .get(&target)
-                    .map(|value| format!("{value:.0} ms"))
-                    .unwrap_or_else(|| "unknown".to_string()),
-            }
-        })
-        .collect()
-}
-
-fn component_name(target: &str) -> &str {
-    match target {
-        "https://heytea.dev" => "Website",
-        "https://api.heytea.dev/healthz" => "API health",
-        "https://api.heytea.dev/readyz" => "API readiness",
-        "https://docs.heytea.dev" => "Docs",
-        "https://mcp.heytea.dev" => "MCP",
-        "https://status.heytea.dev" => "Status page",
-        _ => target,
+    let latency = start.elapsed().as_millis();
+    templates::StatusComponent {
+        name: name.to_string(),
+        target: public_target.to_string(),
+        state: if ok { "Operational" } else { "Degraded" }.to_string(),
+        class_name: if ok { "ok" } else { "bad" }.to_string(),
+        uptime: "live".to_string(),
+        latency: format!("{latency} ms"),
     }
 }
 
@@ -577,6 +506,24 @@ fn agent_user_agent(headers: &HeaderMap) -> bool {
                 || value.contains("gptbot")
                 || value.contains("anthropic-ai")
                 || value.contains("perplexitybot")
+        })
+        .unwrap_or(false)
+}
+
+fn evil_request(headers: &HeaderMap) -> bool {
+    // RFC 3514 is below HTTP; honor edge/test headers that surface the bit.
+    ["x-evil-bit", "x-rfc3514", "x-rfc3514-evil"]
+        .iter()
+        .any(|name| truthy_header(headers, name))
+}
+
+fn truthy_header(headers: &HeaderMap, name: &str) -> bool {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            matches!(value.as_str(), "1" | "true" | "yes" | "evil" | "set")
         })
         .unwrap_or(false)
 }

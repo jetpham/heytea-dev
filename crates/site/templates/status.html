@@ -24,7 +24,7 @@
     <section class="components" aria-labelledby="components-title">
       <h2 id="components-title">Services</h2>
       {% if components.len() == 0 %}
-        <p class="empty">Blackbox probe data is not available.</p>
+        <p class="empty">Live checks are not available.</p>
       {% endif %}
       {% for component in components %}
         <article class="component">
@@ -34,7 +34,7 @@
           </div>
           <dl>
             <div><dt>Status</dt><dd class="{{ component.class_name }}">{{ component.state }}</dd></div>
-            <div><dt>24h uptime</dt><dd>{{ component.uptime }}</dd></div>
+            <div><dt>Check</dt><dd>{{ component.uptime }}</dd></div>
             <div><dt>Latency</dt><dd>{{ component.latency }}</dd></div>
           </dl>
         </article>

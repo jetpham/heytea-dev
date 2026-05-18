@@ -8,7 +8,4 @@ let
 in
 {
   "tailscale-auth-key.age".publicKeys = recipients;
-  "grafana-secret-key.age".publicKeys = recipients;
-  "grafana-admin-password.age".publicKeys = recipients;
-  "umami-app-secret.age".publicKeys = recipients;
 }

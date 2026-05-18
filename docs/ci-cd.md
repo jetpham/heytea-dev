@@ -43,7 +43,7 @@ The deploy workflow joins the tailnet as `tag:ci` and deploys to the server node
 Tailscale requirements:
 
 - OAuth client can create tagged ephemeral nodes with `tag:ci`.
-- ACL permits `tag:ci` to connect to `tag:server` on TCP `22`.
+- ACL permits `tag:ci` to connect to `tag:server` on TCP `2222`.
 - `tag:ci` has a tag owner in the tailnet policy.
 - `tag:server` has a tag owner in the tailnet policy.
 - MagicDNS resolves `heytea-dev`, or the workflow should be changed to use `100.86.76.122` directly.
@@ -57,7 +57,7 @@ Minimal ACL shape:
     "tag:server": ["autogroup:admin"]
   },
   "acls": [
-    { "action": "accept", "src": ["tag:ci"], "dst": ["tag:server:22"] }
+    { "action": "accept", "src": ["tag:ci"], "dst": ["tag:server:2222"] }
   ]
 }
 ```
@@ -80,7 +80,7 @@ Steps:
 4. Add the private key as the GitHub secret `DEPLOY_SSH_KEY`.
 5. Verify from GitHub Actions with a manual `Deploy` run.
 
-The deploy workflow uses deploy-rs against flake node `.#heytea-dev`, SSH user `root`, and host `heytea-dev`.
+The deploy workflow uses deploy-rs against flake node `.#heytea-dev`, SSH user `root`, host `heytea-dev`, and port `2222` over Tailscale. Public TCP `22` is reserved for the anonymous readonly SSH TUI.
 
 ## Runtime Secrets
 
@@ -89,9 +89,6 @@ Runtime secrets are encrypted with agenix and committed as `.age` files. They ar
 Current encrypted runtime secrets:
 
 - `secrets/tailscale-auth-key.age`
-- `secrets/grafana-secret-key.age`
-- `secrets/grafana-admin-password.age`
-- `secrets/umami-app-secret.age`
 
 These must remain decryptable by the production host key in `secrets/secrets.nix`.
 
@@ -140,7 +137,7 @@ Before pushing `main`:
 
 - Add GitHub environments: `production`, `crates-io`.
 - Add GitHub secrets: `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_SECRET`, `DEPLOY_SSH_KEY`.
-- Confirm Tailscale ACL allows `tag:ci` to SSH to `tag:server:22`.
+- Confirm Tailscale ACL allows `tag:ci` to SSH to `tag:server:2222`.
 - Confirm the deploy SSH public key is already present on the server through NixOS config.
 - Decide the production database cutover plan for the fresh location-first schema.
 - Configure crates.io Trusted Publisher for `heytea`.

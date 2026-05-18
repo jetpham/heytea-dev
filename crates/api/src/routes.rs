@@ -2,7 +2,7 @@ use crate::{db, error::ApiError, openapi::ApiDoc, AppState};
 use axum::response::sse::{Event, KeepAlive};
 use axum::{
     extract::{Path, Query, State},
-    http::{header, HeaderMap, HeaderValue},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     response::Sse,
     routing::get,
@@ -191,7 +191,12 @@ pub(crate) async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
         database,
         checked_at: Utc::now(),
     };
-    (no_store_headers(), Json(response))
+    let status = if database {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (status, no_store_headers(), Json(response))
 }
 
 async fn metrics() -> &'static str {
