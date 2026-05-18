@@ -71,6 +71,7 @@ in
   users.users.root.openssh.authorizedKeys.keys = [
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE40ISu3ydCqfdpb26JYD5cIN0Fu0id/FDS+xjB5zpqu"
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPyic30I+SaDw0Lz/EFpMNeHCwxpwPfkgfR6uz3g7io7"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIORZnYAU2nrjmek2zLVHPn+fjQh3XPezZtxPcTKUCMkk github-actions-heytea-dev-deploy-2026-05-18"
   ];
 
   boot.loader.grub.enable = lib.mkDefault true;

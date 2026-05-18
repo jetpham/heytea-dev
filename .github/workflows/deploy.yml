@@ -37,14 +37,35 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
       - name: Configure SSH
+        id: ssh
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          cat > ~/.ssh/config <<'EOF'
+
+          probe() {
+            ssh -p "$1" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=8 \
+              -o StrictHostKeyChecking=accept-new \
+              root@heytea-dev 'printf deploy-ready' 2>/dev/null || true
+          }
+
+          if [ "$(probe 2222)" = deploy-ready ]; then
+            port=2222
+          elif [ "$(probe 22)" = deploy-ready ]; then
+            port=22
+          else
+            echo "could not reach admin OpenSSH on heytea-dev port 2222 or bootstrap port 22" >&2
+            exit 1
+          fi
+
+          cat > ~/.ssh/config <<EOF
           Host heytea-dev
             User root
-            Port 2222
+            Port $port
             StrictHostKeyChecking accept-new
           EOF
+          echo "port=$port" >> "$GITHUB_OUTPUT"
       - name: Deploy NixOS
-        run: nix develop --accept-flake-config -c deploy .#heytea-dev
+        run: nix develop --accept-flake-config -c deploy --ssh-opts "-p ${{ steps.ssh.outputs.port }}" .#heytea-dev
