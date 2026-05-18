@@ -73,4 +73,12 @@ jobs:
           EOF
           echo "port=$port" >> "$GITHUB_OUTPUT"
       - name: Deploy NixOS
-        run: nix develop --accept-flake-config -c deploy --ssh-opts "-p ${{ steps.ssh.outputs.port }}" .#heytea-dev
+        run: |
+          set -euo pipefail
+
+          deploy_args=(--ssh-opts "-p ${{ steps.ssh.outputs.port }}")
+          if [ "${{ steps.ssh.outputs.port }}" = "22" ]; then
+            deploy_args+=(--magic-rollback false)
+          fi
+
+          nix develop --accept-flake-config -c deploy "${deploy_args[@]}" .#heytea-dev
