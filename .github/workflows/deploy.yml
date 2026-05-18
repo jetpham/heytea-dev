@@ -26,6 +26,11 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af || true
+          df -h
       - name: Connect to Tailscale
         uses: tailscale/github-action@v3
         with:
