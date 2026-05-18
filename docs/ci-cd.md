@@ -107,7 +107,7 @@ Release behavior:
 
 - Publishing from a GitHub release requires the release tag to match the SDK package version, such as `v0.1.1` for version `0.1.1`.
 - Bump `crates/sdk/Cargo.toml` before creating a release for a new SDK publish.
-- `v0.1.0` was already published, so the next SDK publish needs a higher version.
+- `v0.1.0` was already published.
 
 ## CLI Releases
 

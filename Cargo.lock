@@ -1355,7 +1355,7 @@ checksum = "e712f64ec3850b98572bffac52e2c6f282b29fe6c5fa6d42334b30be438d95c1"
 
 [[package]]
 name = "heytea"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1368,7 +1368,7 @@ dependencies = [
 
 [[package]]
 name = "heytea-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1389,7 +1389,7 @@ dependencies = [
 
 [[package]]
 name = "heytea-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "heytea-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "serde",
@@ -1410,7 +1410,7 @@ dependencies = [
 
 [[package]]
 name = "heytea-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1425,7 +1425,7 @@ dependencies = [
 
 [[package]]
 name = "heytea-poller"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1442,7 +1442,7 @@ dependencies = [
 
 [[package]]
 name = "heytea-site"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "askama",
@@ -1461,7 +1461,7 @@ dependencies = [
 
 [[package]]
 name = "heytea-ssh-tui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",

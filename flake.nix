@@ -25,7 +25,7 @@
       (system:
         let
           pkgs = import nixpkgs { inherit system; };
-          version = "0.1.0";
+          version = "0.1.1";
 
           rustBinary = { package, pname ? package, extraNativeBuildInputs ? [ ], extraAttrs ? { } }:
             pkgs.rustPlatform.buildRustPackage ({

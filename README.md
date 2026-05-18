@@ -2,23 +2,32 @@
 
 Live wait-time and status dashboard for public HeyTea locations.
 
+## Why This Exists
+
+I wanted to go to HeyTea with my friends and did not want to be surprised by the wait time. Ellie said it would be nice to have an app that just checked the wait time, so I decompiled the Android app and found the public endpoints that power wait-time data.
+
+The first version was a singleton app for the Downtown Metreon location in San Francisco. Later, a friend was leaving for the UK, so I extended it to work for every location I could find, including China. China required decompiling the China version of the app too, then stitching both endpoint families into one service.
+
+The result is a small public service for nerds who like HeyTea.
+
+## What It Does
+
 The public API uses stable location slugs and never accepts or returns upstream shop IDs. Status, wait, notice, history, and stream endpoints require an explicit location slug.
 
 Live values are considered fresh until the next expected poll: `ttl_seconds = max(0, observed_at + poll_interval - now)`. Poller commits normalized data to Postgres, sends a Postgres notification, and the API broadcasts `status.updated` to connected SSE clients.
 
-## Stack
+## Technical Breakdown
 
-- Rust API with Axum, sqlx, and utoipa OpenAPI
-- Rust poller service for HeyTea public app endpoints
-- Public anonymous HTTP MCP server
-- Public anonymous readonly SSH TUI server for `ssh heytea.dev`
-- Rust SDK crate and CLI binary named `heytea`
-- Rust/Axum + Askama server-rendered dashboard, docs, and status pages
-- Vite-built browser assets for tiny SSE updates and Swagger UI docs
-- Postgres + TimescaleDB for canonical state and history
-- Postgres notifications for live SSE fanout; no Redis cache
-- NixOS, Caddy, deploy-rs, agenix, Tailscale admin access
-- Daily Backblaze B2 backups via restic
+- `heytea-poller` discovers locations and polls public HeyTea app endpoints for wait times and notices.
+- Postgres + TimescaleDB store the normalized location catalog, current status, and wait-time history.
+- `heytea-api` serves JSON, OpenAPI, health/readiness, metrics, and location-specific SSE streams.
+- `heytea-site` serves the finder, location pages, docs shell, status page, and discovery files.
+- `heytea-mcp` exposes anonymous HTTP MCP tools for agents.
+- `heytea-ssh-tui` lets anyone run `ssh heytea.dev` for a readonly terminal view.
+- The Rust SDK crate and `heytea` CLI make the public API scriptable.
+- Postgres notifications fan out live updates without Redis.
+- NixOS, Caddy, deploy-rs, agenix, and Tailscale run the minimal production host.
+- Caddy serves HTTP/1.1, HTTP/2, HTTP/3/QUIC, TLS 1.2, and TLS 1.3.
 
 ## Public API
 
