@@ -62,10 +62,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Build CLI package
-        if: ${{ steps.existing.outputs.exists != 'true' || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.existing.outputs.exists != 'true' }}
         run: nix --accept-flake-config build .#heytea-cli --out-link result-heytea-cli
       - name: Package CLI binary
-        if: ${{ steps.existing.outputs.exists != 'true' || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.existing.outputs.exists != 'true' }}
         run: |
           set -euo pipefail
           version="${{ steps.release.outputs.version }}"
@@ -76,22 +76,18 @@ jobs:
           tar -C dist -czf "dist/$package.tar.gz" "$package"
           (cd dist && sha256sum "$package.tar.gz" > SHA256SUMS)
       - name: Upload workflow artifact
-        if: ${{ steps.existing.outputs.exists != 'true' || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.existing.outputs.exists != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: heytea-cli-${{ steps.release.outputs.tag }}-x86_64-linux
           path: |
             dist/*.tar.gz
             dist/SHA256SUMS
-      - name: Ensure release exists
-        if: ${{ steps.existing.outputs.exists != 'true' || github.event_name == 'workflow_dispatch' }}
+      - name: Create release with assets
+        if: ${{ steps.existing.outputs.exists != 'true' }}
         run: |
+          set -euo pipefail
           target=$(git rev-parse HEAD)
-          gh release view "${{ steps.release.outputs.tag }}" --repo "$GITHUB_REPOSITORY" || gh release create "${{ steps.release.outputs.tag }}" --target "$target" --title "${{ steps.release.outputs.tag }}" --notes "heytea CLI ${{ steps.release.outputs.tag }}"
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Upload release assets
-        if: ${{ steps.existing.outputs.exists != 'true' || github.event_name == 'workflow_dispatch' }}
-        run: gh release upload "${{ steps.release.outputs.tag }}" dist/*.tar.gz dist/SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+          gh release create "${{ steps.release.outputs.tag }}" --target "$target" --title "${{ steps.release.outputs.tag }}" --notes "heytea CLI ${{ steps.release.outputs.tag }}" dist/*.tar.gz dist/SHA256SUMS --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ github.token }}

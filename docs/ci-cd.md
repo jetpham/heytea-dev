@@ -6,7 +6,7 @@ GitHub is intended to be the source of truth for `jetpham/heytea-dev`. The local
 
 - `CI`: runs on pull requests and pushes to `main`.
 - `Deploy`: runs after successful `CI` on `main`, configures Cloudflare DNS/proxying, deploys NixOS, and verifies production.
-- `Publish Crate`: runs after successful `CI` on `main`; publishes the `heytea` Rust SDK when the package version is not already on crates.io.
+- `Publish Crate`: runs on pushes to `main`, waits for the matching `CI` run to pass, and publishes the `heytea` Rust SDK when the package version is not already on crates.io.
 - `Release CLI`: runs after successful `CI` on `main`; creates `v<heytea-cli version>` and uploads the Linux CLI tarball when that release does not already exist.
 
 ## GitHub Repository Settings
@@ -122,7 +122,7 @@ Required crates.io Trusted Publisher settings:
 
 Main-branch behavior:
 
-- After successful `CI` on `main`, the workflow checks the `heytea` version from `crates/sdk/Cargo.toml`.
+- On pushes to `main`, the workflow waits for the matching `CI` run to pass and then checks the `heytea` version from `crates/sdk/Cargo.toml`. This stays on the `push` event because crates.io Trusted Publishing does not support `workflow_run`.
 - If that exact version is already on crates.io, the workflow exits successfully without publishing.
 - If that version is not on crates.io, the workflow runs `cargo publish -p heytea --dry-run --locked`, authenticates with crates.io Trusted Publishing, and publishes.
 - Bump `crates/sdk/Cargo.toml` before merging a new SDK release to `main`.
@@ -139,8 +139,8 @@ Main-branch behavior:
 
 - After successful `CI` on `main`, the workflow reads the `heytea-cli` version from `crates/cli/Cargo.toml`.
 - If release `v<version>` already exists, the workflow exits successfully without rebuilding assets.
-- If release `v<version>` does not exist, the workflow builds `.#heytea-cli`, uploads the workflow artifact, creates the GitHub release, and attaches the tarball plus `SHA256SUMS`.
-- Manual dispatch remains available for recovery and can clobber assets on an existing release.
+- If release `v<version>` does not exist, the workflow builds `.#heytea-cli`, uploads the workflow artifact, and creates the GitHub release with the tarball plus `SHA256SUMS` attached during release creation.
+- Manual dispatch remains available for new release tags. Existing releases are treated as immutable and skipped.
 
 The current release artifact target is Linux x86_64. Additional portable/static or macOS/Windows artifacts can be added later.
 
