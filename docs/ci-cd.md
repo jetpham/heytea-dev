@@ -32,7 +32,7 @@ Required for deploys:
 
 - `TS_OAUTH_CLIENT_ID`: Tailscale OAuth client ID used by `tailscale/github-action`.
 - `TS_OAUTH_SECRET`: Tailscale OAuth client secret.
-- `DEPLOY_SSH_KEY`: private Ed25519 key allowed to SSH as `root` to `heytea-dev` over Tailscale.
+- `DEPLOY_SSH_KEY`: private Ed25519 key allowed to SSH as `root` to `heytea-dev-1` over Tailscale.
 
 Do not add a static crates.io token if Trusted Publishing is configured. The SDK publish workflow uses GitHub OIDC through `rust-lang/crates-io-auth-action`.
 
@@ -46,7 +46,7 @@ Tailscale requirements:
 - ACL permits `tag:ci` to connect to `tag:server` on TCP `2222`.
 - `tag:ci` has a tag owner in the tailnet policy.
 - `tag:server` has a tag owner in the tailnet policy.
-- MagicDNS resolves `heytea-dev`, or the workflow should be changed to use `100.86.76.122` directly.
+- MagicDNS resolves `heytea-dev-1`, or the workflow should be changed to use the current Tailscale IPv4 directly.
 
 Minimal ACL shape:
 
@@ -64,8 +64,8 @@ Minimal ACL shape:
 
 Current production server state checked from the operator machine:
 
-- Tailscale host: `heytea-dev`
-- Tailscale IPv4: `100.86.76.122`
+- Tailscale host: `heytea-dev-1`
+- Tailscale IPv4: `100.109.239.16`
 - Server tag: `tag:server`
 
 ## Deploy SSH Key
@@ -80,7 +80,7 @@ Steps:
 4. Add the private key as the GitHub secret `DEPLOY_SSH_KEY`.
 5. Verify from GitHub Actions with a manual `Deploy` run.
 
-The deploy workflow uses deploy-rs against flake node `.#heytea-dev`, SSH user `root`, host `heytea-dev`, and port `2222` over Tailscale. Public TCP `22` is reserved for the anonymous readonly SSH TUI.
+The deploy workflow uses deploy-rs against flake node `.#heytea-dev`, SSH user `root`, host `heytea-dev-1`, and port `2222` over Tailscale. Public TCP `22` is reserved for the anonymous readonly SSH TUI.
 
 ## Runtime Secrets
 

@@ -53,7 +53,7 @@ jobs:
               -o BatchMode=yes \
               -o ConnectTimeout=8 \
               -o StrictHostKeyChecking=accept-new \
-              root@heytea-dev 'printf deploy-ready' 2>/dev/null || true
+              root@heytea-dev-1 'printf deploy-ready' 2>/dev/null || true
           }
 
           if [ "$(probe 2222)" = deploy-ready ]; then
@@ -61,12 +61,12 @@ jobs:
           elif [ "$(probe 22)" = deploy-ready ]; then
             port=22
           else
-            echo "could not reach admin OpenSSH on heytea-dev port 2222 or bootstrap port 22" >&2
+            echo "could not reach admin OpenSSH on heytea-dev-1 port 2222 or bootstrap port 22" >&2
             exit 1
           fi
 
           cat > ~/.ssh/config <<EOF
-          Host heytea-dev
+          Host heytea-dev-1
             User root
             Port $port
             StrictHostKeyChecking accept-new

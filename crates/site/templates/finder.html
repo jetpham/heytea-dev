@@ -23,17 +23,29 @@
   </nav>
   <main id="finder">
     <p>find a heytea near you</p>
+    <p id="geo-status" class="status-note" aria-live="polite">{{ location_status }}</p>
     <label for="q">search</label>
-    <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="city or location">
+    <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="city or location" aria-describedby="geo-status search-fields">
+    <p id="search-fields" class="status-note">search checks store name, URL slug, and address.</p>
     <button id="near" type="button">use my location</button>
-    <ol id="locations"></ol>
+    <ol id="locations">
+      {% if rows.len() == 0 %}
+        <li class="empty">locations unavailable</li>
+      {% endif %}
+      {% for row in rows %}
+        <li data-search="{{ row.search_text }}" data-latitude="{{ row.latitude }}" data-longitude="{{ row.longitude }}" data-distance="{{ row.distance }}" data-open="{{ row.open_sort }}" data-wait="{{ row.wait_sort }}" data-name="{{ row.name_sort }}">
+          <a href="/{{ row.slug }}">{{ row.name }}</a>
+          <span class="meta"><span class="wait">{{ row.status_text }}</span><span class="distance"{% if row.distance_hidden %} hidden{% endif %}>{{ row.distance_text }}</span></span>
+        </li>
+      {% endfor %}
+    </ol>
+    {% if show_geo_attribution %}<p class="geo-credit">IP location data by <a href="{{ geo_attribution_url }}">{{ geo_attribution_name }}</a>.</p>{% endif %}
   </main>
   <footer>
     <span>made by <a href="https://jetpham.com">jet</a></span>
     {% if evil %}<span class="evil">i know you're evil</span>{% else %}<span class="evil" aria-hidden="true"></span>{% endif %}
     <a class="source" href="https://github.com/jetpham/heytea-dev">source code</a>
   </footer>
-  <script id="locations-data" type="application/json">{{ locations_json|safe }}</script>
   <script>{{ inline_js|safe }}</script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 mod assets;
 mod error;
+mod geoip;
 mod routes;
 mod templates;
 
@@ -16,6 +17,7 @@ pub struct AppState {
     pub public_api_url: String,
     pub client: reqwest::Client,
     pub assets: Assets,
+    pub(crate) geoip: geoip::GeoIp,
 }
 
 #[tokio::main]
@@ -36,12 +38,17 @@ async fn main() -> anyhow::Result<()> {
             .timeout(Duration::from_secs(4))
             .build()?,
         assets: Assets::load(asset_root()),
+        geoip: geoip::GeoIp::from_env()?,
     };
 
     let app = app(state);
     tracing::info!(%addr, "starting heytea site");
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 

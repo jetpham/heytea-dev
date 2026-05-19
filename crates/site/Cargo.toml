@@ -13,6 +13,7 @@ axum.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 heytea-core = { path = "../core" }
+maxminddb.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

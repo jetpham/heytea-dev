@@ -27,7 +27,7 @@ Create a normal Ubuntu 24.04 droplet in `sfo3` using the `$4/mo` `1 vCPU`, `512 
 
 During the stock Ubuntu bootstrap, TCP `22` is normal admin SSH; restrict it to the operator's current public IP until NixOS is deployed. After the first NixOS deploy, TCP `22` becomes the anonymous readonly SSH TUI and admin SSH moves to Tailscale-only TCP `2222`.
 
-Use the droplet name `heytea-dev`. The production host configuration expects the hostname and Tailscale node name to be `heytea-dev`.
+Use the droplet name `heytea-dev`. The production host configuration uses `heytea-dev`; the active Tailscale MagicDNS deploy target is `heytea-dev-1` while the retired node name remains reserved.
 
 ## Install NixOS
 
@@ -63,7 +63,7 @@ This activates `nixosConfigurations.heytea-dev`, starts Postgres/TimescaleDB, mi
 After Tailscale joins, trust the admin SSH host key over the tailnet:
 
 ```sh
-ssh -p 2222 -o StrictHostKeyChecking=accept-new root@heytea-dev true
+ssh -p 2222 -o StrictHostKeyChecking=accept-new root@heytea-dev-1 true
 ```
 
 Future deploys should use the default deploy-rs target over Tailscale:
@@ -93,8 +93,8 @@ Raw SSH is not proxied by normal Cloudflare orange-cloud records. Until Cloudfla
 Check system health over Tailscale:
 
 ```sh
-ssh -p 2222 root@heytea-dev systemctl is-system-running
-ssh -p 2222 root@heytea-dev systemctl --failed --no-pager
+ssh -p 2222 root@heytea-dev-1 systemctl is-system-running
+ssh -p 2222 root@heytea-dev-1 systemctl --failed --no-pager
 ```
 
 Check public endpoints after DNS propagates:
@@ -127,7 +127,7 @@ Public TCP `22` is intentionally open for `heytea-ssh-tui`, not admin SSH. Confi
 
 ```sh
 ssh heytea.dev
-ssh -p 2222 root@heytea-dev true
+ssh -p 2222 root@heytea-dev-1 true
 ssh -p 2222 -o BatchMode=yes -o ConnectTimeout=8 root@<droplet-ip> true
 ```
 

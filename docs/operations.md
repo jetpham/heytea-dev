@@ -15,7 +15,7 @@ These are intended to be Cloudflare proxied records for web traffic. Caddy termi
 ## SSH
 
 - Public readonly TUI: `ssh heytea.dev` on TCP `22`, served by `heytea-ssh-tui`, no password or key required.
-- Admin SSH: `ssh -p 2222 root@heytea-dev` over Tailscale only.
+- Admin SSH: `ssh -p 2222 root@heytea-dev-1` over Tailscale only.
 
 ## Internal Services
 

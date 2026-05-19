@@ -1,10 +1,10 @@
 use crate::{error::SiteError, templates, AppState};
 use askama::Template;
 use axum::{
-    extract::{Path, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    extract::{ConnectInfo, Path, State},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{Html, IntoResponse, Response},
-    routing::get,
+    routing::{any, get},
     Json, Router,
 };
 use chrono::Utc;
@@ -13,14 +13,14 @@ use heytea_core::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::json;
-use std::time::Instant;
+use std::{net::SocketAddr, time::Instant};
 use tower_http::services::{ServeDir, ServeFile};
 
 pub fn router(state: AppState) -> Router {
     let asset_root = state.assets.root();
 
     Router::new()
-        .route("/", get(finder))
+        .route("/", any(finder))
         .route("/status", get(status))
         .route("/docs", get(docs))
         .route("/robots.txt", get(robots))
@@ -46,7 +46,19 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn finder(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, SiteError> {
+async fn finder(
+    method: Method,
+    State(state): State<AppState>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+) -> Result<Response, SiteError> {
+    if htcpcp_method(&method) {
+        return Ok(htcpcp_response(&method, &headers));
+    }
+    if method != Method::GET && method != Method::HEAD {
+        return Ok(method_not_allowed().into_response());
+    }
+
     if wants_json(&headers) {
         return Ok((
             negotiated_headers("public, max-age=60, must-revalidate"),
@@ -67,9 +79,19 @@ async fn finder(State(state): State<AppState>, headers: HeaderMap) -> Result<Res
         return Ok(text(LLMS_TXT).into_response());
     }
 
+    let peer = connect_info.map(|ConnectInfo(addr)| addr);
+    let inferred_place = state.geoip.lookup_request(&headers, peer);
+    let attribution = inferred_place
+        .as_ref()
+        .and_then(|_| state.geoip.attribution());
     let locations = api_json::<LocationsResponse>(&state, "/locations").await;
-    let template = templates::FinderTemplate::new(locations, evil_request(&headers));
-    Ok((html_shell_headers(""), Html(template.render()?)).into_response())
+    let template = templates::FinderTemplate::new(
+        locations,
+        inferred_place.as_ref(),
+        attribution,
+        evil_request(&headers),
+    );
+    Ok((finder_html_headers(), Html(template.render()?)).into_response())
 }
 
 async fn location_dashboard(
@@ -528,13 +550,82 @@ fn truthy_header(headers: &HeaderMap, name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn html_shell_headers(stream_url: &str) -> HeaderMap {
-    let mut headers = typed_headers(
-        "text/html; charset=utf-8",
-        "public, max-age=30, must-revalidate",
+fn htcpcp_method(method: &Method) -> bool {
+    matches!(method.as_str(), "BREW" | "WHEN")
+}
+
+fn htcpcp_response(method: &Method, headers: &HeaderMap) -> Response {
+    let mut response_headers = typed_headers("message/teapot; charset=utf-8", "no-store");
+    response_headers.insert("safe", HeaderValue::from_static("yes"));
+    response_headers.insert(
+        "accept-additions",
+        HeaderValue::from_static("milk-type, syrup-type, sweetener-type, spice-type, tea-type"),
     );
+    response_headers.insert(
+        "x-htcpcp-version",
+        HeaderValue::from_static("RFC2324, RFC7168"),
+    );
+
+    if method.as_str() == "WHEN" {
+        return (StatusCode::NO_CONTENT, response_headers).into_response();
+    }
+
+    if coffee_request(headers) {
+        return (
+            StatusCode::from_u16(418).expect("valid teapot status"),
+            response_headers,
+            "418 I'm a teapot. This appliance serves tea, not coffee.\n",
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        response_headers,
+        "HTCPCP-TEA accepted. The requested tea is now steeping.\n",
+    )
+        .into_response()
+}
+
+fn coffee_request(headers: &HeaderMap) -> bool {
+    [header::ACCEPT, header::CONTENT_TYPE]
+        .iter()
+        .filter_map(|name| headers.get(name))
+        .filter_map(|value| value.to_str().ok())
+        .map(str::to_ascii_lowercase)
+        .any(|value| value.contains("coffee") || value.contains("message/coffeepot"))
+}
+
+fn method_not_allowed() -> (StatusCode, HeaderMap, &'static str) {
+    let mut headers = no_store_headers();
+    headers.insert(
+        header::ALLOW,
+        HeaderValue::from_static("GET, HEAD, BREW, WHEN"),
+    );
+    (
+        StatusCode::METHOD_NOT_ALLOWED,
+        headers,
+        "method not allowed",
+    )
+}
+
+fn html_shell_headers(stream_url: &str) -> HeaderMap {
+    html_shell_headers_with_cache(stream_url, "public, max-age=30, must-revalidate")
+}
+
+fn finder_html_headers() -> HeaderMap {
+    let mut headers = html_shell_headers_with_cache("", "private, no-store");
+    headers.insert(
+        header::VARY,
+        HeaderValue::from_static("Accept, User-Agent, X-Forwarded-For"),
+    );
+    headers
+}
+
+fn html_shell_headers_with_cache(stream_url: &str, cache_control: &str) -> HeaderMap {
+    let mut headers = typed_headers("text/html; charset=utf-8", cache_control);
     let csp = format!(
-        "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:; img-src data:; connect-src {}",
+        "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:; img-src data:; prefetch-src 'self'; connect-src {}",
         csp_origin(stream_url)
     );
     headers.insert(
@@ -707,3 +798,51 @@ Use this skill when a user asks about the current status or wait time for HeyTea
 
 Call `GET https://api.heytea.dev/locations` to discover slugs. Use `GET https://api.heytea.dev/locations/{slug}/status` for current state and `GET https://api.heytea.dev/locations/{slug}/history?range=today` for the current-day trend. Use the MCP `list_locations`, `get_status`, or `get_history` tools when MCP is available.
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn htcpcp_brews_tea() {
+        let response = htcpcp_response(&Method::from_bytes(b"BREW").unwrap(), &HeaderMap::new());
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "message/teapot; charset=utf-8"
+        );
+        assert_eq!(
+            response.headers().get("x-htcpcp-version").unwrap(),
+            "RFC2324, RFC7168"
+        );
+    }
+
+    #[test]
+    fn htcpcp_refuses_coffee() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ACCEPT,
+            HeaderValue::from_static("message/coffeepot"),
+        );
+
+        let response = htcpcp_response(&Method::from_bytes(b"BREW").unwrap(), &headers);
+
+        assert_eq!(response.status(), StatusCode::from_u16(418).unwrap());
+    }
+
+    #[test]
+    fn htcpcp_when_stops_additions() {
+        let response = htcpcp_response(&Method::from_bytes(b"WHEN").unwrap(), &HeaderMap::new());
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(response.headers().get("safe").unwrap(), "yes");
+    }
+
+    #[test]
+    fn htcpcp_methods_are_custom() {
+        assert!(htcpcp_method(&Method::from_bytes(b"BREW").unwrap()));
+        assert!(htcpcp_method(&Method::from_bytes(b"WHEN").unwrap()));
+        assert!(!htcpcp_method(&Method::GET));
+    }
+}

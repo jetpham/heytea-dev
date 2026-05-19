@@ -261,7 +261,7 @@
       nixosConfigurations.heytea = self.nixosConfigurations.heytea-dev;
 
       deploy.nodes."heytea-dev" = {
-        hostname = "heytea-dev";
+        hostname = "heytea-dev-1";
         sshUser = "root";
         sshOpts = [ "-p" "2222" ];
         profiles.system = {

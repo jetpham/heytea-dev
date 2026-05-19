@@ -57,6 +57,13 @@ in
     sshTuiPackage = mkOption { type = types.package; default = placeholder "heytea-ssh-tui"; };
     sitePackage = mkOption { type = types.package; default = placeholder "heytea-site"; };
     migrationsPackage = mkOption { type = types.package; default = migrationsPlaceholder; };
+    geoIpDatabase = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      description = "Optional local MaxMind-compatible City MMDB used for site IP geolocation.";
+    };
+    geoIpAttributionName = mkOption { type = types.str; default = "DB-IP"; };
+    geoIpAttributionUrl = mkOption { type = types.str; default = "https://db-ip.com"; };
   };
 
   config = mkIf cfg.enable {
@@ -192,6 +199,10 @@ in
         HEYTEA_API_URL = "http://127.0.0.1:3000";
         HEYTEA_MCP_URL = "http://127.0.0.1:3001";
         HEYTEA_PUBLIC_API_URL = "https://${cfg.apiDomain}";
+      } // lib.optionalAttrs (cfg.geoIpDatabase != null) {
+        HEYTEA_GEOIP_MMDB = toString cfg.geoIpDatabase;
+        HEYTEA_GEOIP_ATTRIBUTION_NAME = cfg.geoIpAttributionName;
+        HEYTEA_GEOIP_ATTRIBUTION_URL = cfg.geoIpAttributionUrl;
       };
     };
 

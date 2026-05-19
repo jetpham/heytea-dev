@@ -1,9 +1,13 @@
-use crate::assets::AssetTags;
+use crate::{
+    assets::AssetTags,
+    geoip::{miles_between, Coordinates, GeoAttribution, InferredPlace},
+};
 use askama::Template;
 use chrono::{DateTime, Utc};
 use chrono_tz::America::Los_Angeles;
 use chrono_tz::Tz;
 use heytea_core::{HistoryResponse, LocationResponse, LocationsResponse, StatusResponse};
+use std::cmp::Ordering;
 use std::fmt::Write as _;
 
 const DASHBOARD_CSS: &str = include_str!("../templates/dashboard.css");
@@ -162,23 +166,164 @@ pub struct FinderTemplate {
     pub favicon_href: String,
     pub inline_css: String,
     pub inline_js: &'static str,
-    pub locations_json: String,
+    pub rows: Vec<FinderLocationRow>,
+    pub location_status: String,
+    pub show_geo_attribution: bool,
+    pub geo_attribution_name: String,
+    pub geo_attribution_url: String,
     pub evil: bool,
 }
 
+pub struct FinderLocationRow {
+    pub slug: String,
+    pub name: String,
+    pub search_text: String,
+    pub status_text: String,
+    pub latitude: String,
+    pub longitude: String,
+    pub distance: String,
+    pub distance_text: String,
+    pub distance_hidden: bool,
+    pub open_sort: u8,
+    pub wait_sort: i32,
+    pub name_sort: String,
+}
+
 impl FinderTemplate {
-    pub fn new(locations: Option<LocationsResponse>, evil: bool) -> Self {
+    pub fn new(
+        locations: Option<LocationsResponse>,
+        inferred: Option<&InferredPlace>,
+        attribution: Option<&GeoAttribution>,
+        evil: bool,
+    ) -> Self {
+        let mut locations = locations
+            .map(|locations| locations.locations)
+            .unwrap_or_default();
+        let here = inferred.map(|place| place.coordinates);
+        sort_locations(&mut locations, here);
+        let rows = locations
+            .into_iter()
+            .map(|location| FinderLocationRow::new(location, here))
+            .collect();
+        let location_status = match inferred {
+            Some(place) => format!(
+                "server location guess: {}; showing nearest stores first.",
+                place.label
+            ),
+            None => "server location guess unavailable; showing open stores first.".to_string(),
+        };
+        let show_geo_attribution = inferred.is_some() && attribution.is_some();
+        let (geo_attribution_name, geo_attribution_url) = attribution
+            .map(|attribution| (attribution.name.clone(), attribution.url.clone()))
+            .unwrap_or_default();
+
         Self {
             favicon_href: svg_data_uri(&favicon_svg()),
             inline_css: dashboard_css(),
             inline_js: FINDER_JS,
+            rows,
+            location_status,
+            show_geo_attribution,
+            geo_attribution_name,
+            geo_attribution_url,
             evil,
-            locations_json: safe_json(&locations.unwrap_or_else(|| LocationsResponse {
-                generated_at: Utc::now(),
-                locations: Vec::new(),
-            })),
         }
     }
+}
+
+impl FinderLocationRow {
+    fn new(location: LocationResponse, here: Option<Coordinates>) -> Self {
+        let coordinates = location_coordinates(&location);
+        let distance = here
+            .zip(coordinates)
+            .map(|(here, location)| miles_between(here, location));
+        let name_sort = location.name.to_ascii_lowercase();
+        let search_text = format!("{} {} {}", location.name, location.slug, location.address)
+            .to_ascii_lowercase();
+        let status_text = finder_status(&location);
+        let open_sort = open_sort(&location);
+        let wait_sort = wait_sort(&location);
+
+        Self {
+            slug: location.slug,
+            name: name_sort.clone(),
+            search_text,
+            status_text,
+            latitude: coordinates
+                .map(|coordinates| coordinates.latitude.to_string())
+                .unwrap_or_default(),
+            longitude: coordinates
+                .map(|coordinates| coordinates.longitude.to_string())
+                .unwrap_or_default(),
+            distance: distance
+                .map(|distance| format!("{distance:.6}"))
+                .unwrap_or_default(),
+            distance_text: distance
+                .map(|distance| format!("{distance:.1} mi"))
+                .unwrap_or_default(),
+            distance_hidden: distance.is_none(),
+            open_sort,
+            wait_sort,
+            name_sort,
+        }
+    }
+}
+
+fn sort_locations(locations: &mut [LocationResponse], here: Option<Coordinates>) {
+    locations.sort_by(|a, b| match here {
+        Some(here) => distance_sort(a, here)
+            .total_cmp(&distance_sort(b, here))
+            .then_with(|| default_location_order(a, b)),
+        None => default_location_order(a, b),
+    });
+}
+
+fn distance_sort(location: &LocationResponse, here: Coordinates) -> f64 {
+    location_coordinates(location)
+        .map(|coordinates| miles_between(here, coordinates))
+        .unwrap_or(f64::INFINITY)
+}
+
+fn default_location_order(a: &LocationResponse, b: &LocationResponse) -> Ordering {
+    open_sort(a)
+        .cmp(&open_sort(b))
+        .then_with(|| wait_sort(a).cmp(&wait_sort(b)))
+        .then_with(|| a.name.cmp(&b.name))
+}
+
+fn open_sort(location: &LocationResponse) -> u8 {
+    if location.is_open == Some(true) {
+        0
+    } else {
+        1
+    }
+}
+
+fn wait_sort(location: &LocationResponse) -> i32 {
+    location.pickup_wait_minutes.unwrap_or(i32::MAX)
+}
+
+fn finder_status(location: &LocationResponse) -> String {
+    match location.is_open {
+        Some(true) => location
+            .pickup_wait_minutes
+            .map(minute_words)
+            .unwrap_or_else(|| "wait unknown".to_string()),
+        Some(false) => "closed".to_string(),
+        None => "status unknown".to_string(),
+    }
+}
+
+fn location_coordinates(location: &LocationResponse) -> Option<Coordinates> {
+    let coordinates = Coordinates {
+        latitude: location.latitude?,
+        longitude: location.longitude?,
+    };
+    (coordinates.latitude.is_finite()
+        && coordinates.longitude.is_finite()
+        && (-90.0..=90.0).contains(&coordinates.latitude)
+        && (-180.0..=180.0).contains(&coordinates.longitude))
+    .then_some(coordinates)
 }
 
 pub(crate) fn favicon_svg() -> String {
@@ -248,12 +393,6 @@ fn dashboard_css() -> String {
         DASHBOARD_FONT_B64.trim(),
         DASHBOARD_CSS
     )
-}
-
-fn safe_json<T: serde::Serialize>(value: &T) -> String {
-    serde_json::to_string(value)
-        .expect("serialize template json")
-        .replace('<', "\\u003c")
 }
 
 fn svg_data_uri(svg: &str) -> String {
@@ -387,14 +526,72 @@ mod tests {
 
     #[test]
     fn evil_footer_is_conditional() {
-        let evil = FinderTemplate::new(None, true)
+        let evil = FinderTemplate::new(None, None, None, true)
             .render()
             .expect("render finder");
-        let normal = FinderTemplate::new(None, false)
+        let normal = FinderTemplate::new(None, None, None, false)
             .render()
             .expect("render finder");
 
         assert!(evil.contains("i know you're evil"));
         assert!(!normal.contains("i know you're evil"));
+    }
+
+    #[test]
+    fn finder_renders_server_ordered_rows() {
+        let now = Utc::now();
+        let locations = LocationsResponse {
+            generated_at: now,
+            locations: vec![
+                test_location("far", "Far Store", 34.0522, -118.2437, 4),
+                test_location("near", "Near Store", 37.784, -122.403, 8),
+            ],
+        };
+        let inferred = InferredPlace {
+            coordinates: Coordinates {
+                latitude: 37.784,
+                longitude: -122.403,
+            },
+            label: "San Francisco, California, United States".to_string(),
+        };
+        let attribution = GeoAttribution {
+            name: "DB-IP".to_string(),
+            url: "https://db-ip.com".to_string(),
+        };
+        let template =
+            FinderTemplate::new(Some(locations), Some(&inferred), Some(&attribution), false);
+
+        assert_eq!(template.rows[0].slug, "near");
+        let html = template.render().expect("render finder");
+        assert!(html.contains("server location guess: San Francisco"));
+        assert!(html.contains("search checks store name, URL slug, and address."));
+        assert!(html.contains("data-distance=\"0.000000\""));
+        assert!(html.contains("IP location data by"));
+        assert!(!html.contains("locations-data"));
+    }
+
+    fn test_location(
+        slug: &str,
+        name: &str,
+        latitude: f64,
+        longitude: f64,
+        wait_minutes: i32,
+    ) -> LocationResponse {
+        let now = Utc::now();
+        LocationResponse {
+            slug: slug.to_string(),
+            name: name.to_string(),
+            address: format!("{name} address"),
+            latitude: Some(latitude),
+            longitude: Some(longitude),
+            timezone: "America/Los_Angeles".to_string(),
+            is_enabled: Some(true),
+            support_takeaway: Some(true),
+            is_open: Some(true),
+            pickup_wait_minutes: Some(wait_minutes),
+            observed_at: Some(now),
+            stale: false,
+            stale_after: Some(now),
+        }
     }
 }
