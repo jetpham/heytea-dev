@@ -42,7 +42,7 @@ jobs:
         id: published
         run: |
           set -euo pipefail
-          published=$(curl -fsS https://crates.io/api/v1/crates/heytea | jq -r --arg version "${{ steps.version.outputs.version }}" 'any(.versions[]?; .num == $version)')
+          published=$(curl -fsS -H 'User-Agent: jetpham/heytea-dev publish workflow' https://crates.io/api/v1/crates/heytea | jq -r --arg version "${{ steps.version.outputs.version }}" 'any(.versions[]?; .num == $version)')
           echo "published=$published" >> "$GITHUB_OUTPUT"
           if [ "$published" = true ]; then
             echo "heytea ${{ steps.version.outputs.version }} is already published"
