@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: Existing or new release tag, such as v0.1.1. Defaults to the CLI package version.
+        description: Existing or new release tag, such as heytea-cli-v0.1.1. Defaults to the CLI package version.
         required: false
         type: string
 
@@ -43,10 +43,11 @@ jobs:
           set -euo pipefail
           if [ -n "${{ github.event.inputs.tag_name }}" ]; then
             tag="${{ github.event.inputs.tag_name }}"
-            version="${tag#v}"
+            version="${tag#heytea-cli-v}"
+            version="${version#v}"
           else
             version=$(nix develop --accept-flake-config -c sh -c 'cargo metadata --no-deps --format-version=1 | jq -r '\''.packages[] | select(.name == "heytea-cli") | .version'\''')
-            tag="v${version}"
+            tag="heytea-cli-v${version}"
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -79,7 +80,7 @@ jobs:
         if: ${{ steps.existing.outputs.exists != 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: heytea-cli-${{ steps.release.outputs.tag }}-x86_64-linux
+          name: ${{ steps.release.outputs.tag }}-x86_64-linux
           path: |
             dist/*.tar.gz
             dist/SHA256SUMS
