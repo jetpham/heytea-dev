@@ -5,9 +5,9 @@ GitHub is intended to be the source of truth for `jetpham/heytea-dev`. The local
 ## Workflows
 
 - `CI`: runs on pull requests and pushes to `main`.
-- `Deploy`: runs after successful `CI` on `main`, and can also be run manually.
-- `Publish Crate`: publishes the `heytea` Rust SDK from a GitHub release or manual dispatch.
-- `Release CLI`: builds `.#heytea-cli`, packages `heytea-<version>-x86_64-linux.tar.gz`, writes `SHA256SUMS`, and uploads both to a GitHub release.
+- `Deploy`: runs after successful `CI` on `main`, configures Cloudflare DNS/proxying, deploys NixOS, and verifies production.
+- `Publish Crate`: runs after successful `CI` on `main`; publishes the `heytea` Rust SDK when the package version is not already on crates.io.
+- `Release CLI`: runs after successful `CI` on `main`; creates `v<heytea-cli version>` and uploads the Linux CLI tarball when that release does not already exist.
 
 ## GitHub Repository Settings
 
@@ -16,12 +16,11 @@ Required:
 - Default branch: `main`.
 - Actions enabled.
 - Environment `production` for deployments.
-- Environment `crates-io` for crates.io Trusted Publishing.
+- Environment `crates-io` for crates.io Trusted Publishing, with no manual approval gate.
 
 Recommended:
 
 - Require `CI` before merging to `main`.
-- Add manual approval protection to the `production` environment until deploys are proven stable.
 - Keep `contents: write` limited to release workflows only.
 
 No GitHub Actions variables are required right now.
@@ -33,6 +32,7 @@ Required for deploys:
 - `TS_OAUTH_CLIENT_ID`: Tailscale OAuth client ID used by `tailscale/github-action`.
 - `TS_OAUTH_SECRET`: Tailscale OAuth client secret.
 - `DEPLOY_SSH_KEY`: private Ed25519 key allowed to SSH as `root` to `heytea-dev-1` over Tailscale.
+- `CLOUDFLARE_API_TOKEN`: Cloudflare token allowed to read zones, edit DNS records, and edit zone SSL settings for `heytea.dev`.
 
 Do not add a static crates.io token if Trusted Publishing is configured. The SDK publish workflow uses GitHub OIDC through `rust-lang/crates-io-auth-action`.
 
@@ -92,6 +92,23 @@ Current encrypted runtime secrets:
 
 These must remain decryptable by the production host key in `secrets/secrets.nix`.
 
+## Cloudflare Proxying
+
+Production deploys configure these A records automatically:
+
+- Proxied through Cloudflare: `heytea.dev`, `api.heytea.dev`, `docs.heytea.dev`, `mcp.heytea.dev`, `status.heytea.dev`.
+- DNS-only direct SSH TUI: `ssh.heytea.dev`.
+
+The deploy workflow also sets the zone SSL mode to `Full`. Caddy uses an internal origin certificate because public HTTPS is only intended to enter through Cloudflare.
+
+The NixOS host firewall keeps TCP `22` public for the anonymous readonly SSH TUI, allows TCP `80` and `443` only from Cloudflare source ranges, and trusts `tailscale0` for admin/deploy access.
+
+After each deploy, GitHub Actions verifies that Cloudflare is serving `https://heytea.dev/`, that direct origin HTTPS is blocked, and that the site can resolve `8.8.8.8` to Mountain View for server-side GeoIP sorting.
+
+## GeoIP Database
+
+The DB-IP City Lite MMDB is downloaded and pinned by `flake.nix` as `.#dbip-city-lite-mmdb`. Production points `HEYTEA_GEOIP_MMDB` at that Nix store path automatically; no server-side file copy is needed.
+
 ## crates.io SDK Publishing
 
 The SDK package is `heytea`.
@@ -103,10 +120,12 @@ Required crates.io Trusted Publisher settings:
 - Environment: `crates-io`
 - Package: `heytea`
 
-Release behavior:
+Main-branch behavior:
 
-- Publishing from a GitHub release requires the release tag to match the SDK package version, such as `v0.1.1` for version `0.1.1`.
-- Bump `crates/sdk/Cargo.toml` before creating a release for a new SDK publish.
+- After successful `CI` on `main`, the workflow checks the `heytea` version from `crates/sdk/Cargo.toml`.
+- If that exact version is already on crates.io, the workflow exits successfully without publishing.
+- If that version is not on crates.io, the workflow runs `cargo publish -p heytea --dry-run --locked`, authenticates with crates.io Trusted Publishing, and publishes.
+- Bump `crates/sdk/Cargo.toml` before merging a new SDK release to `main`.
 - `v0.1.0` was already published.
 
 ## CLI Releases
@@ -116,19 +135,20 @@ The CLI release workflow builds the Nix package `.#heytea-cli` and uploads:
 - `heytea-<version>-x86_64-linux.tar.gz`
 - `SHA256SUMS`
 
-Release behavior:
+Main-branch behavior:
 
-- On a published GitHub release, assets are uploaded to that release.
-- On manual dispatch, provide `tag_name`; the workflow creates the release if it does not already exist.
+- After successful `CI` on `main`, the workflow reads the `heytea-cli` version from `crates/cli/Cargo.toml`.
+- If release `v<version>` already exists, the workflow exits successfully without rebuilding assets.
+- If release `v<version>` does not exist, the workflow builds `.#heytea-cli`, uploads the workflow artifact, creates the GitHub release, and attaches the tarball plus `SHA256SUMS`.
+- Manual dispatch remains available for recovery and can clobber assets on an existing release.
 
 The current release artifact target is Linux x86_64. Additional portable/static or macOS/Windows artifacts can be added later.
 
 ## Infrastructure Tokens
 
-The deploy workflow does not provision infrastructure. These tokens are only needed for manual infrastructure changes today:
+The deploy workflow provisions Cloudflare DNS/proxy state. These additional tokens are only needed for manual infrastructure changes:
 
 - `DIGITALOCEAN_TOKEN`
-- `CLOUDFLARE_API_TOKEN`
 - Backblaze B2 credentials for restic setup, if changing backup infrastructure.
 
 ## First Push Checklist
@@ -136,7 +156,7 @@ The deploy workflow does not provision infrastructure. These tokens are only nee
 Before pushing `main`:
 
 - Add GitHub environments: `production`, `crates-io`.
-- Add GitHub secrets: `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_SECRET`, `DEPLOY_SSH_KEY`.
+- Add GitHub secrets: `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_SECRET`, `DEPLOY_SSH_KEY`, `CLOUDFLARE_API_TOKEN`.
 - Confirm Tailscale ACL allows `tag:ci` to SSH to `tag:server:2222`.
 - Confirm the deploy SSH public key is already present on the server through NixOS config.
 - Decide the production database cutover plan for the fresh location-first schema.
@@ -145,5 +165,5 @@ Before pushing `main`:
 After pushing:
 
 - Confirm `CI` passes on `main`.
-- Confirm `Deploy` either waits for production approval or completes successfully.
+- Confirm `Deploy` completes successfully.
 - Verify `https://api.heytea.dev/locations` and one slugged status endpoint.

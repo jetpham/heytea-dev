@@ -1,32 +1,33 @@
 name: Release CLI
 
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       tag_name:
-        description: Existing or new release tag, such as v0.1.1
-        required: true
+        description: Existing or new release tag, such as v0.1.1. Defaults to the CLI package version.
+        required: false
         type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-cli-${{ github.event.release.tag_name || github.event.inputs.tag_name }}
+  group: release-cli-${{ github.event.workflow_run.head_sha || github.event.inputs.tag_name || github.sha }}
   cancel-in-progress: false
 
 jobs:
   release-cli:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    env:
-      RELEASE_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag_name }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.release.tag_name || github.ref }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: cachix/install-nix-action@v30
         with:
           extra_nix_config: |
@@ -36,18 +37,38 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker system prune -af || true
           df -h
-      - name: Use existing release tag when dispatched manually
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: |
-          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
-            git checkout "$RELEASE_TAG"
-          fi
-      - name: Build CLI package
-        run: nix --accept-flake-config build .#heytea-cli --out-link result-heytea-cli
-      - name: Package CLI binary
+      - name: Resolve release tag
+        id: release
         run: |
           set -euo pipefail
-          version="${RELEASE_TAG#v}"
+          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            tag="${{ github.event.inputs.tag_name }}"
+            version="${tag#v}"
+          else
+            version=$(nix develop --accept-flake-config -c sh -c 'cargo metadata --no-deps --format-version=1 | jq -r '\''.packages[] | select(.name == "heytea-cli") | .version'\''')
+            tag="v${version}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Check existing release
+        id: existing
+        run: |
+          if gh release view "${{ steps.release.outputs.tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "${{ steps.release.outputs.tag }} already exists"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Build CLI package
+        if: ${{ steps.existing.outputs.exists != 'true' || github.event_name == 'workflow_dispatch' }}
+        run: nix --accept-flake-config build .#heytea-cli --out-link result-heytea-cli
+      - name: Package CLI binary
+        if: ${{ steps.existing.outputs.exists != 'true' || github.event_name == 'workflow_dispatch' }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.release.outputs.version }}"
           package="heytea-${version}-x86_64-linux"
           mkdir -p "dist/$package"
           cp -L result-heytea-cli/bin/heytea "dist/$package/heytea"
@@ -55,20 +76,22 @@ jobs:
           tar -C dist -czf "dist/$package.tar.gz" "$package"
           (cd dist && sha256sum "$package.tar.gz" > SHA256SUMS)
       - name: Upload workflow artifact
+        if: ${{ steps.existing.outputs.exists != 'true' || github.event_name == 'workflow_dispatch' }}
         uses: actions/upload-artifact@v4
         with:
-          name: heytea-cli-${{ env.RELEASE_TAG }}-x86_64-linux
+          name: heytea-cli-${{ steps.release.outputs.tag }}-x86_64-linux
           path: |
             dist/*.tar.gz
             dist/SHA256SUMS
       - name: Ensure release exists
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.existing.outputs.exists != 'true' || github.event_name == 'workflow_dispatch' }}
         run: |
           target=$(git rev-parse HEAD)
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" || gh release create "$RELEASE_TAG" --target "$target" --title "$RELEASE_TAG" --notes "heytea CLI $RELEASE_TAG"
+          gh release view "${{ steps.release.outputs.tag }}" --repo "$GITHUB_REPOSITORY" || gh release create "${{ steps.release.outputs.tag }}" --target "$target" --title "${{ steps.release.outputs.tag }}" --notes "heytea CLI ${{ steps.release.outputs.tag }}"
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Upload release assets
-        run: gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+        if: ${{ steps.existing.outputs.exists != 'true' || github.event_name == 'workflow_dispatch' }}
+        run: gh release upload "${{ steps.release.outputs.tag }}" dist/*.tar.gz dist/SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ github.token }}

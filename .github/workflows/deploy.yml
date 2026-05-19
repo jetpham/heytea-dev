@@ -31,6 +31,50 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker system prune -af || true
           df -h
+      - name: Configure Cloudflare proxy
+        id: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          nix develop --accept-flake-config -c bash -s <<'SCRIPT'
+          set -euo pipefail
+
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "CLOUDFLARE_API_TOKEN is required for production deploys" >&2
+            exit 1
+          fi
+
+          api_base=https://api.cloudflare.com/client/v4
+          zone_name=heytea.dev
+          auth_header=(--header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" --header "Content-Type: application/json")
+
+          zone_id=$(curl -fsS -G "${auth_header[@]}" --data-urlencode "name=${zone_name}" "${api_base}/zones" | jq -er '.result[0].id')
+          origin_ipv4=$(curl -fsS -G "${auth_header[@]}" --data-urlencode "type=A" --data-urlencode "name=${zone_name}" "${api_base}/zones/${zone_id}/dns_records" | jq -er '.result[0].content')
+
+          upsert_a_record() {
+            local name=$1
+            local proxied=$2
+            local record_id body method url
+            record_id=$(curl -fsS -G "${auth_header[@]}" --data-urlencode "type=A" --data-urlencode "name=${name}" "${api_base}/zones/${zone_id}/dns_records" | jq -r '.result[0].id // empty')
+            body=$(jq -n --arg name "${name}" --arg content "${origin_ipv4}" --argjson proxied "${proxied}" '{type:"A", name:$name, content:$content, ttl:1, proxied:$proxied}')
+            if [ -n "${record_id}" ]; then
+              method=PUT
+              url="${api_base}/zones/${zone_id}/dns_records/${record_id}"
+            else
+              method=POST
+              url="${api_base}/zones/${zone_id}/dns_records"
+            fi
+            curl -fsS -X "${method}" "${auth_header[@]}" --data "${body}" "${url}" | jq -e '.success == true' >/dev/null
+          }
+
+          for host in heytea.dev api.heytea.dev docs.heytea.dev mcp.heytea.dev status.heytea.dev; do
+            upsert_a_record "${host}" true
+          done
+          upsert_a_record ssh.heytea.dev false
+
+          curl -fsS -X PATCH "${auth_header[@]}" --data '{"value":"full"}' "${api_base}/zones/${zone_id}/settings/ssl" | jq -e '.success == true' >/dev/null
+          echo "origin_ipv4=${origin_ipv4}" >> "${GITHUB_OUTPUT}"
+          SCRIPT
       - name: Connect to Tailscale
         uses: tailscale/github-action@v3
         with:
@@ -82,3 +126,21 @@ jobs:
           fi
 
           nix develop --accept-flake-config -c deploy "${deploy_args[@]}" .#heytea-dev
+      - name: Verify deployment
+        run: |
+          set -euo pipefail
+
+          ssh heytea-dev-1 'set -euo pipefail
+            curl -fsS -H "X-Forwarded-For: 8.8.8.8" http://127.0.0.1:3100/ -o /tmp/heytea-geoip-check.html
+            grep -q "server location guess: Mountain View" /tmp/heytea-geoip-check.html
+            grep -q "data-search=\"sunnyvale" /tmp/heytea-geoip-check.html
+          '
+
+          headers=$(mktemp)
+          curl -fsS https://heytea.dev/ -D "$headers" -o /dev/null
+          grep -qi '^cf-ray:' "$headers"
+
+          if curl -kfsS --connect-timeout 8 --resolve "heytea.dev:443:${{ steps.cloudflare.outputs.origin_ipv4 }}" https://heytea.dev/ -o /dev/null; then
+            echo "direct origin HTTPS unexpectedly succeeded" >&2
+            exit 1
+          fi

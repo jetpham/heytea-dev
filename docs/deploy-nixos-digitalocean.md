@@ -84,9 +84,9 @@ Create Cloudflare proxied web records for:
 - `mcp.heytea.dev`
 - `status.heytea.dev`
 
-Set Cloudflare SSL/TLS mode to `Full (strict)`, keep TLS 1.2 and TLS 1.3 enabled, and enable HTTP/2 and HTTP/3 at the edge. Caddy also enables HTTP/1.1, HTTP/2, HTTP/3/QUIC, TLS 1.2, and TLS 1.3 at the origin.
+The deploy workflow sets Cloudflare SSL/TLS mode to `Full`, keeps web records orange-cloud proxied, and keeps `ssh.heytea.dev` DNS-only for the SSH TUI. Caddy uses an internal origin certificate because public web traffic is only intended to enter through Cloudflare.
 
-Raw SSH is not proxied by normal Cloudflare orange-cloud records. Until Cloudflare Spectrum is available, `ssh heytea.dev` only works if `heytea.dev` resolves directly to the droplet. If `heytea.dev` is orange-cloud proxied for web, expose the TUI on a separate DNS-only SSH hostname or expect SSH to fail at Cloudflare.
+Raw SSH is not proxied by normal Cloudflare orange-cloud records. Use `ssh ssh.heytea.dev` for the public TUI.
 
 ## Verify
 
@@ -112,7 +112,7 @@ curl https://status.heytea.dev/
 Check the public SSH TUI:
 
 ```sh
-ssh heytea.dev
+ssh ssh.heytea.dev
 ```
 
 If the local resolver has stale negative cache immediately after DNS creation, validate against the droplet directly while preserving TLS hostname verification:
@@ -126,7 +126,7 @@ curl --resolve api.heytea.dev:443:<droplet-ip> https://api.heytea.dev/locations/
 Public TCP `22` is intentionally open for `heytea-ssh-tui`, not admin SSH. Confirm the public TUI and tailnet admin SSH work, and public admin port `2222` is blocked by the firewall:
 
 ```sh
-ssh heytea.dev
+ssh ssh.heytea.dev
 ssh -p 2222 root@heytea-dev-1 true
 ssh -p 2222 -o BatchMode=yes -o ConnectTimeout=8 root@<droplet-ip> true
 ```

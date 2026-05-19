@@ -59,7 +59,7 @@ nix build .#heytea-api .#heytea-poller .#heytea-mcp .#heytea-ssh-tui .#heytea-cl
 
 ## CI/CD
 
-GitHub Actions run CI on pull requests and pushes to `main`, deploy production after successful CI on `main`, publish the Rust SDK from GitHub releases, and attach the Linux CLI tarball to releases. See `docs/ci-cd.md` for required GitHub secrets, environments, and Tailscale/crates.io setup.
+GitHub Actions run CI on pull requests and pushes to `main`, configure Cloudflare, deploy production after successful CI on `main`, publish new Rust SDK versions, and create Linux CLI releases automatically. See `docs/ci-cd.md` for required GitHub secrets, environments, Tailscale, Cloudflare, and crates.io setup.
 
 ## DigitalOcean NixOS Deploy
 

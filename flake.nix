@@ -76,6 +76,21 @@
             '';
           };
 
+          dbipCityLiteMmdb = pkgs.runCommand "dbip-city-lite-mmdb-2026-05"
+            {
+              nativeBuildInputs = [ pkgs.gzip ];
+              src = pkgs.fetchurl {
+                url = "https://download.db-ip.com/free/dbip-city-lite-2026-05.mmdb.gz";
+                hash = "sha256-lSDMjGXcBMr8iGgqyJ26LPu8tfaG6QlKsCH88q4sAvA=";
+              };
+            }
+            ''
+              runHook preInstall
+              mkdir -p $out/share/heytea
+              gzip -dc $src > $out/share/heytea/dbip-city-lite.mmdb
+              runHook postInstall
+            '';
+
           assetSrc = pkgs.lib.fileset.toSource {
             root = ./.;
             fileset = pkgs.lib.fileset.unions [
@@ -167,6 +182,7 @@
             heytea-site-assets = siteAssets;
             heytea-site = site;
             heytea-migrations = migrations;
+            dbip-city-lite-mmdb = dbipCityLiteMmdb;
             heytea = heytea-cli;
             heytea-assets = assets;
             default = heytea-cli;
@@ -253,6 +269,7 @@
               sshTuiPackage = self.packages.${serverSystem}.heytea-ssh-tui;
               sitePackage = self.packages.${serverSystem}.heytea-site;
               migrationsPackage = self.packages.${serverSystem}.heytea-migrations;
+              geoIpDatabase = "${self.packages.${serverSystem}.dbip-city-lite-mmdb}/share/heytea/dbip-city-lite.mmdb";
             };
           })
         ];

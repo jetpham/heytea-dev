@@ -31,6 +31,7 @@ let
   sitePreamble = ''
     encode zstd gzip
     tls {
+      issuer internal
       protocols tls1.2 tls1.3
     }
   '';

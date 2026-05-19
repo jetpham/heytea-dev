@@ -14,8 +14,10 @@ These are intended to be Cloudflare proxied records for web traffic. Caddy termi
 
 ## SSH
 
-- Public readonly TUI: `ssh heytea.dev` on TCP `22`, served by `heytea-ssh-tui`, no password or key required.
+- Public readonly TUI: `ssh ssh.heytea.dev` on TCP `22`, served by `heytea-ssh-tui`, no password or key required.
 - Admin SSH: `ssh -p 2222 root@heytea-dev-1` over Tailscale only.
+
+Web domains are Cloudflare-proxied. The origin firewall accepts TCP `80` and `443` only from Cloudflare ranges; direct public web access to the droplet should fail.
 
 ## Internal Services
 
