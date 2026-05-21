@@ -3,14 +3,24 @@ use crate::upstream::{
 };
 use chrono::{DateTime, Utc};
 use sqlx::QueryBuilder;
+use std::{collections::HashSet, time::Duration};
 
-pub async fn active_shops(pool: &sqlx::PgPool) -> anyhow::Result<Vec<ShopRef>> {
+pub async fn refresh_managed_locations(pool: &sqlx::PgPool) -> anyhow::Result<i32> {
+    let changed = sqlx::query_scalar::<_, i32>("select refresh_managed_locations()")
+        .fetch_one(pool)
+        .await?;
+    Ok(changed)
+}
+
+pub async fn managed_shops(pool: &sqlx::PgPool) -> anyhow::Result<Vec<ShopRef>> {
     let rows = sqlx::query_as::<_, (i64, String, Option<String>)>(
         r#"
-        select shop_id, country_code, city_code
-        from locations
-        where coalesce(is_enabled, true) is true
-        order by shop_id
+        select l.shop_id, l.country_code, l.city_code
+        from managed_locations ml
+        join locations l on l.shop_id = ml.shop_id
+        where ml.is_active is true
+          and coalesce(l.is_enabled, true) is true
+        order by l.shop_id
         "#,
     )
     .fetch_all(pool)
@@ -23,6 +33,78 @@ pub async fn active_shops(pool: &sqlx::PgPool) -> anyhow::Result<Vec<ShopRef>> {
             city_code,
         })
         .collect())
+}
+
+pub async fn active_cooldowns(
+    pool: &sqlx::PgPool,
+    endpoint: &str,
+) -> anyhow::Result<HashSet<String>> {
+    let rows = sqlx::query_scalar::<_, String>(
+        r#"
+        select provider_key
+        from upstream_provider_cooldowns
+        where endpoint = $1
+          and cooldown_until > now()
+        "#,
+    )
+    .bind(endpoint)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
+}
+
+pub async fn cooldown_active(
+    pool: &sqlx::PgPool,
+    endpoint: &str,
+    provider_key: &str,
+) -> anyhow::Result<bool> {
+    let active = sqlx::query_scalar::<_, bool>(
+        r#"
+        select exists (
+          select 1
+          from upstream_provider_cooldowns
+          where endpoint = $1
+            and provider_key = $2
+            and cooldown_until > now()
+        )
+        "#,
+    )
+    .bind(endpoint)
+    .bind(provider_key)
+    .fetch_one(pool)
+    .await?;
+    Ok(active)
+}
+
+pub async fn trip_provider_cooldown(
+    pool: &sqlx::PgPool,
+    endpoint: &str,
+    provider_key: &str,
+    status_code: Option<i32>,
+    error_message: Option<&str>,
+    duration: Duration,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        insert into upstream_provider_cooldowns (
+          endpoint, provider_key, status_code, error_message, cooldown_until, observed_at
+        )
+        values ($1, $2, $3, $4, now() + ($5::bigint * '1 second'::interval), now())
+        on conflict (endpoint, provider_key) do update set
+          status_code = excluded.status_code,
+          error_message = excluded.error_message,
+          cooldown_until = greatest(upstream_provider_cooldowns.cooldown_until, excluded.cooldown_until),
+          observed_at = now()
+        "#,
+    )
+    .bind(endpoint)
+    .bind(provider_key)
+    .bind(status_code)
+    .bind(error_message)
+    .bind(duration.as_secs().min(i64::MAX as u64) as i64)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub async fn persist_catalog(

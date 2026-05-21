@@ -28,6 +28,7 @@ use utoipa::OpenApi;
         heytea_core::ClosingNoticeResponse,
         heytea_core::HistoryResponse,
         heytea_core::HistoryPoint,
+        heytea_core::HistoryComparisonPoint,
         heytea_core::HealthResponse,
         heytea_core::ReadyResponse,
         heytea_core::ApiErrorBody,

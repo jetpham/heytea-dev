@@ -3,7 +3,7 @@ use crate::{
     geoip::{miles_between, Coordinates, GeoAttribution, InferredPlace},
 };
 use askama::Template;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use chrono_tz::America::Los_Angeles;
 use chrono_tz::Tz;
 use heytea_core::{HistoryResponse, LocationResponse, LocationsResponse, StatusResponse};
@@ -19,13 +19,16 @@ const FAVICON_SVG: &str = include_str!("../templates/heyteafavi.svg");
 
 #[derive(Debug, Clone)]
 pub(crate) struct DashboardView {
-    pub(crate) closed: bool,
+    pub(crate) managed: bool,
     pub(crate) open: bool,
+    pub(crate) graph_hidden: bool,
     pub(crate) status_line: String,
     pub(crate) wait_minutes: i32,
     pub(crate) observed_at: String,
     pub(crate) trend_points: String,
     pub(crate) trend_data: String,
+    pub(crate) comparison_points: String,
+    pub(crate) comparison_data: String,
     pub(crate) trend_minute: i64,
 }
 
@@ -33,71 +36,91 @@ impl DashboardView {
     pub(crate) fn new(
         status: Option<&StatusResponse>,
         history: Option<&HistoryResponse>,
-        location_name: &str,
-        timezone: &str,
+        location: &LocationResponse,
     ) -> Self {
-        let values = history
+        let today_values = history
             .map(|history| {
                 history
                     .points
                     .iter()
-                    .filter_map(|point| point.avg_pickup_wait_minutes)
-                    .map(|value| value.round() as i32)
+                    .filter_map(|point| {
+                        point.avg_pickup_wait_minutes.map(|value| {
+                            (
+                                minute_of_day(point.start, &location.timezone),
+                                value.round() as i32,
+                            )
+                        })
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let trend_max = nice_axis(values.iter().copied().max().unwrap_or(0));
-        let trend_points = values
-            .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                let x = if values.len() < 2 {
-                    100.0
-                } else {
-                    index as f64 * 100.0 / (values.len() - 1) as f64
-                };
-                let y = 38.0 - *value as f64 / trend_max as f64 * 30.0;
-                format!("{x:.1},{y:.1}")
+        let comparison_values = history
+            .map(|history| {
+                history
+                    .comparison_points
+                    .iter()
+                    .filter_map(|point| {
+                        point
+                            .avg_pickup_wait_minutes
+                            .map(|value| (point.minute_of_day, value.round() as i32))
+                    })
+                    .collect::<Vec<_>>()
             })
-            .collect::<Vec<_>>()
-            .join(" ");
-        let trend_data = values
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
+            .unwrap_or_default();
+        let trend_max = nice_axis(
+            today_values
+                .iter()
+                .chain(comparison_values.iter())
+                .map(|(_, value)| *value)
+                .max()
+                .unwrap_or(0),
+        );
+        let trend_points = svg_points(&today_values, trend_max);
+        let trend_data = series_data(&today_values);
+        let comparison_points = svg_points(&comparison_values, trend_max);
+        let comparison_data = series_data(&comparison_values);
         let trend_minute = status
             .map(|status| status.observed_at.timestamp() / 60)
             .unwrap_or_default();
-        let closed = status.and_then(|status| status.is_open) != Some(true);
-        let open = !closed;
+        let managed = location.is_managed;
+        let closed = managed && status.and_then(|status| status.is_open) == Some(false);
+        let open = managed && status.and_then(|status| status.is_open) == Some(true);
+        let graph_hidden = !open || today_values.is_empty();
         let wait_minutes = status
             .and_then(|status| status.pickup_wait_minutes)
             .unwrap_or_default();
         let observed_at = status
             .map(|status| status.observed_at.to_rfc3339())
             .unwrap_or_default();
-        let status_line = if closed {
+        let location_name = location.name.to_ascii_lowercase();
+        let status_line = if !managed {
+            format!("managed tracking is not enabled for heytea {location_name} yet.")
+        } else if closed {
             "closed".to_string()
+        } else if !open {
+            format!("waiting for the first managed wait observation at heytea {location_name}.")
         } else {
             let status = status.expect("open status exists");
             format!(
                 "the wait time at heytea {} is {} as of {}, which was {}",
-                location_name.to_ascii_lowercase(),
+                location_name,
                 minute_words(wait_minutes),
-                compact_time(status.observed_at, timezone),
+                compact_time(status.observed_at, &location.timezone),
                 age_words(status.observed_at)
             )
         };
 
         Self {
-            closed,
+            managed,
             open,
+            graph_hidden,
             status_line,
             wait_minutes,
             observed_at,
             trend_points,
             trend_data,
+            comparison_points,
+            comparison_data,
             trend_minute,
         }
     }
@@ -109,18 +132,23 @@ pub struct DashboardTemplate {
     pub stream_url: String,
     pub canonical_url: String,
     pub location_name: String,
+    pub address: String,
     pub timezone: String,
+    pub managed: bool,
+    pub request_tracking_href: String,
     pub favicon_href: String,
     pub inline_css: String,
     pub inline_js: &'static str,
     pub evil: bool,
-    pub closed: bool,
     pub open: bool,
+    pub graph_hidden: bool,
     pub status_line: String,
     pub wait_minutes: i32,
     pub observed_at: String,
     pub trend_points: String,
     pub trend_data: String,
+    pub comparison_points: String,
+    pub comparison_data: String,
     pub trend_minute: i64,
 }
 
@@ -132,29 +160,31 @@ impl DashboardTemplate {
         location: LocationResponse,
         evil: bool,
     ) -> Self {
-        let view = DashboardView::new(
-            status.as_ref(),
-            history.as_ref(),
-            &location.name,
-            &location.timezone,
-        );
+        let view = DashboardView::new(status.as_ref(), history.as_ref(), &location);
+        let canonical_url = format!("https://heytea.dev/{}", location.slug);
+        let request_tracking_href = request_tracking_href(&location, &canonical_url);
 
         Self {
             stream_url,
-            canonical_url: format!("https://heytea.dev/{}", location.slug),
+            canonical_url,
             location_name: location.name.to_ascii_lowercase(),
+            address: location.address,
             timezone: location.timezone,
+            managed: view.managed,
+            request_tracking_href,
             favicon_href: svg_data_uri(&favicon_svg()),
             inline_css: dashboard_css(),
             inline_js: DASHBOARD_JS,
             evil,
-            closed: view.closed,
             open: view.open,
+            graph_hidden: view.graph_hidden,
             status_line: view.status_line,
             wait_minutes: view.wait_minutes,
             observed_at: view.observed_at,
             trend_points: view.trend_points,
             trend_data: view.trend_data,
+            comparison_points: view.comparison_points,
+            comparison_data: view.comparison_data,
             trend_minute: view.trend_minute,
         }
     }
@@ -179,6 +209,7 @@ pub struct FinderLocationRow {
     pub name: String,
     pub search_text: String,
     pub status_text: String,
+    pub tracking_text: String,
     pub latitude: String,
     pub longitude: String,
     pub distance: String,
@@ -241,6 +272,11 @@ impl FinderLocationRow {
         let search_text = format!("{} {} {}", location.name, location.slug, location.address)
             .to_ascii_lowercase();
         let status_text = finder_status(&location);
+        let tracking_text = if location.is_managed {
+            "tracked".to_string()
+        } else {
+            "request tracking".to_string()
+        };
         let open_sort = open_sort(&location);
         let wait_sort = wait_sort(&location);
 
@@ -249,6 +285,7 @@ impl FinderLocationRow {
             name: name_sort.clone(),
             search_text,
             status_text,
+            tracking_text,
             latitude: coordinates
                 .map(|coordinates| coordinates.latitude.to_string())
                 .unwrap_or_default(),
@@ -285,25 +322,43 @@ fn distance_sort(location: &LocationResponse, here: Coordinates) -> f64 {
 }
 
 fn default_location_order(a: &LocationResponse, b: &LocationResponse) -> Ordering {
-    open_sort(a)
-        .cmp(&open_sort(b))
+    managed_sort(a)
+        .cmp(&managed_sort(b))
+        .then_with(|| open_sort(a).cmp(&open_sort(b)))
         .then_with(|| wait_sort(a).cmp(&wait_sort(b)))
         .then_with(|| a.name.cmp(&b.name))
 }
 
-fn open_sort(location: &LocationResponse) -> u8 {
-    if location.is_open == Some(true) {
+fn managed_sort(location: &LocationResponse) -> u8 {
+    if location.is_managed {
         0
     } else {
         1
     }
 }
 
+fn open_sort(location: &LocationResponse) -> u8 {
+    if location.is_managed && location.is_open == Some(true) {
+        0
+    } else if location.is_open == Some(true) {
+        1
+    } else {
+        2
+    }
+}
+
 fn wait_sort(location: &LocationResponse) -> i32 {
-    location.pickup_wait_minutes.unwrap_or(i32::MAX)
+    if location.is_managed {
+        location.pickup_wait_minutes.unwrap_or(i32::MAX)
+    } else {
+        i32::MAX
+    }
 }
 
 fn finder_status(location: &LocationResponse) -> String {
+    if !location.is_managed {
+        return "not tracked yet".to_string();
+    }
     match location.is_open {
         Some(true) => location
             .pickup_wait_minutes
@@ -387,6 +442,60 @@ fn compact_time(value: DateTime<Utc>, timezone: &str) -> String {
         .to_string()
 }
 
+fn minute_of_day(value: DateTime<Utc>, timezone: &str) -> i32 {
+    let timezone = timezone.parse::<Tz>().unwrap_or(Los_Angeles);
+    let local = value.with_timezone(&timezone);
+    local.hour() as i32 * 60 + local.minute() as i32
+}
+
+fn svg_points(values: &[(i32, i32)], max_value: i32) -> String {
+    values
+        .iter()
+        .map(|(minute, value)| {
+            let minute = (*minute).clamp(0, 1439) as f64;
+            let x = minute * 100.0 / 1439.0;
+            let y = 38.0 - *value as f64 / max_value.max(1) as f64 * 30.0;
+            format!("{x:.1},{y:.1}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn series_data(values: &[(i32, i32)]) -> String {
+    values
+        .iter()
+        .map(|(minute, value)| format!("{minute}:{value}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn request_tracking_href(location: &LocationResponse, canonical_url: &str) -> String {
+    let subject = format!("Managed HeyTea tracking request: {}", location.name);
+    let body = format!(
+        "Hi Jet,\n\nPlease add managed tracking for:\nStore: {}\nSlug: {}\nAddress: {}\nPage: {}\n\nWhy I want tracking:\n\n\nFavorite HeyTea item:\n",
+        location.name, location.slug, location.address, canonical_url
+    );
+    format!(
+        "mailto:jet@extremist.software?subject={}&body={}",
+        percent_encode(&subject),
+        percent_encode(&body)
+    )
+}
+
+fn percent_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            b' ' => encoded.push_str("%20"),
+            _ => write!(&mut encoded, "%{byte:02X}").expect("write to string"),
+        }
+    }
+    encoded
+}
+
 fn dashboard_css() -> String {
     format!(
         "@font-face{{font-family:a;src:url(data:font/woff2;base64,{}) format('woff2');font-display:block}}{}",
@@ -448,7 +557,7 @@ fn nice_axis(value: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use heytea_core::HistoryPoint;
+    use heytea_core::{HistoryComparisonPoint, HistoryPoint};
 
     #[test]
     fn dashboard_payload_stays_small() {
@@ -485,6 +594,13 @@ mod tests {
                     sample_count: 1,
                 })
                 .collect(),
+            comparison_points: (0..48)
+                .map(|index| HistoryComparisonPoint {
+                    minute_of_day: index * 30,
+                    avg_pickup_wait_minutes: Some((index % 12) as f64),
+                    sample_count: 7,
+                })
+                .collect(),
         };
         let location = LocationResponse {
             slug: "downtown-metreon".to_string(),
@@ -493,6 +609,7 @@ mod tests {
             latitude: Some(37.784),
             longitude: Some(-122.403),
             timezone: "America/Los_Angeles".to_string(),
+            is_managed: true,
             is_enabled: Some(true),
             support_takeaway: Some(true),
             is_open: Some(true),
@@ -585,6 +702,7 @@ mod tests {
             latitude: Some(latitude),
             longitude: Some(longitude),
             timezone: "America/Los_Angeles".to_string(),
+            is_managed: true,
             is_enabled: Some(true),
             support_takeaway: Some(true),
             is_open: Some(true),

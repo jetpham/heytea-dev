@@ -23,6 +23,20 @@ Web domains are Cloudflare-proxied. The origin firewall accepts TCP `80` and `44
 
 Postgres uses the local Unix socket with peer authentication. It should not bind to Caddy or public interfaces. Separate dashboards, collectors, and analytics apps are not part of the minimal production runtime.
 
+## Managed Tracking
+
+The poller only performs every-minute wait polling for effective managed locations. Managed state is derived from seeded regions plus manual overrides in Postgres:
+
+- Seed regions: San Francisco Bay Area and London.
+- Manual admin: `nix run .#admin -- managed list`, `managed add <slug> [note]`, `managed remove <slug>`, `managed recompute`, and `managed regions`.
+- Run admin commands on the host over Tailscale admin SSH so the default `DATABASE_URL=postgresql:///heytea?host=/run/postgresql&user=heytea` reaches the local socket.
+
+Unmanaged locations remain visible in the finder and have static store pages, but they do not get background wait polling, streams, or persisted history. Store pages include a `mailto:` request to `jet@extremist.software` for managed tracking requests.
+
+## Upstream Safety
+
+Catalog refresh defaults to once per day with a slower retry interval after failure. Notices refresh daily, not every minute. Wait polling is limited to managed locations with low upstream concurrency. Upstream `403`, `405`, and `429` responses trip a provider cooldown in `upstream_provider_cooldowns`; the poller skips cooled-down providers instead of retrying every shop individually.
+
 ## Backups
 
 Daily restic backups go to Backblaze B2. At minimum, back up Postgres logical dumps.

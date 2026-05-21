@@ -58,8 +58,9 @@ impl HeyTeaClient {
         }
 
         if shops.is_empty() {
+            let status_code = access_denial_status(&errors);
             return PollResult::error(
-                None,
+                status_code,
                 started,
                 anyhow!("all catalog providers failed: {}", errors.join("; ")),
             );
@@ -456,6 +457,10 @@ impl WaitProvider {
         }
     }
 
+    pub fn cooldown_key(self) -> String {
+        format!("{}:{}", self.provider_name(), self.region_code())
+    }
+
     fn international_region(self) -> Option<InternationalRegion> {
         match self {
             Self::International(region) => Some(region),
@@ -488,6 +493,18 @@ impl WaitProvider {
             }
         }
     }
+}
+
+fn access_denial_status(errors: &[String]) -> Option<u16> {
+    [403, 405, 429].into_iter().find(|status| {
+        let parenthesized = format!("({status})");
+        let spaced = format!(" {status} ");
+        errors.iter().any(|error| {
+            error.contains(&parenthesized)
+                || error.contains(&spaced)
+                || error.ends_with(&status.to_string())
+        })
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]

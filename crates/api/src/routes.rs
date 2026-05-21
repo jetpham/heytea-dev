@@ -127,8 +127,14 @@ pub(crate) async fn location_history(
 pub(crate) async fn location_stream(
     State(state): State<AppState>,
     Path(path): Path<LocationPath>,
-) -> impl IntoResponse {
-    stream_for_slug(state, path.slug).await
+) -> Result<impl IntoResponse, ApiError> {
+    let location = db::location(&state.pool, &path.slug).await?;
+    if !location.is_managed {
+        return Err(ApiError::not_ready(
+            "status stream is only available for managed locations",
+        ));
+    }
+    Ok(stream_for_slug(state, path.slug).await)
 }
 
 async fn stream_for_slug(state: AppState, slug: String) -> impl IntoResponse {

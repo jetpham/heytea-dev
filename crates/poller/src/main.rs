@@ -13,6 +13,9 @@ use upstream::{
 };
 
 const DEFAULT_CATALOG_INTERVAL_SECONDS: u64 = 86_400;
+const DEFAULT_CATALOG_RETRY_INTERVAL_SECONDS: u64 = 900;
+const DEFAULT_NOTICE_INTERVAL_SECONDS: u64 = 86_400;
+const DEFAULT_UPSTREAM_COOLDOWN_SECONDS: u64 = 3_600;
 const DEFAULT_UPSTREAM_CONCURRENCY: usize = 16;
 
 #[tokio::main]
@@ -32,11 +35,26 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(DEFAULT_CATALOG_INTERVAL_SECONDS);
+    let catalog_retry_interval = env::var("HEYTEA_CATALOG_RETRY_INTERVAL_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_CATALOG_RETRY_INTERVAL_SECONDS);
     let upstream_concurrency = env::var("HEYTEA_UPSTREAM_CONCURRENCY")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_UPSTREAM_CONCURRENCY);
+    let notice_interval = env::var("HEYTEA_NOTICE_INTERVAL_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_NOTICE_INTERVAL_SECONDS);
+    let upstream_cooldown = Duration::from_secs(
+        env::var("HEYTEA_UPSTREAM_COOLDOWN_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_UPSTREAM_COOLDOWN_SECONDS),
+    );
     let max_connections = env_u32("HEYTEA_POLLER_MAX_CONNECTIONS", 5);
 
     let pool = PgPoolOptions::new()
@@ -49,22 +67,50 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         interval,
         catalog_interval,
+        catalog_retry_interval,
+        notice_interval,
         upstream_concurrency,
+        upstream_cooldown_seconds = upstream_cooldown.as_secs(),
         max_connections,
         "starting heytea poller"
     );
 
-    let mut last_catalog_poll = None;
+    let mut last_catalog_attempt = None;
+    let mut last_catalog_success = None;
+    let mut last_notice_attempt = None;
     loop {
-        let poll_catalog = last_catalog_poll
+        let now = Utc::now();
+        let catalog_due = last_catalog_success
+            .map(|last| now.signed_duration_since(last).num_seconds() >= catalog_interval as i64)
+            .unwrap_or(true);
+        let catalog_retry_due = last_catalog_attempt
             .map(|last| {
-                Utc::now().signed_duration_since(last).num_seconds() >= catalog_interval as i64
+                now.signed_duration_since(last).num_seconds() >= catalog_retry_interval as i64
             })
             .unwrap_or(true);
-        match poll_once(&pool, &client, poll_catalog, upstream_concurrency).await {
+        let poll_catalog = catalog_due && catalog_retry_due;
+        if poll_catalog {
+            last_catalog_attempt = Some(now);
+        }
+        let poll_notices = last_notice_attempt
+            .map(|last| now.signed_duration_since(last).num_seconds() >= notice_interval as i64)
+            .unwrap_or(true);
+        if poll_notices {
+            last_notice_attempt = Some(now);
+        }
+        match poll_once(
+            &pool,
+            &client,
+            poll_catalog,
+            poll_notices,
+            upstream_concurrency,
+            upstream_cooldown,
+        )
+        .await
+        {
             Ok(catalog_success) => {
                 if poll_catalog && catalog_success {
-                    last_catalog_poll = Some(Utc::now());
+                    last_catalog_success = Some(Utc::now());
                 }
             }
             Err(error) => tracing::error!(?error, "poll cycle failed"),
@@ -77,27 +123,57 @@ async fn poll_once(
     pool: &sqlx::PgPool,
     client: &HeyTeaClient,
     poll_catalog: bool,
+    poll_notices: bool,
     upstream_concurrency: usize,
+    upstream_cooldown: Duration,
 ) -> anyhow::Result<bool> {
     let mut catalog_success = !poll_catalog;
-    let mut shops = if poll_catalog {
-        let catalog = client.fetch_shop_catalog().await;
-        catalog_success = catalog.success;
-        persistence::persist_catalog(pool, catalog).await?
-    } else {
-        Vec::new()
-    };
-    if shops.is_empty() {
-        shops = persistence::active_shops(pool).await?;
+    if poll_catalog {
+        if persistence::cooldown_active(pool, "shop_catalog", "all").await? {
+            tracing::warn!("shop catalog refresh skipped during upstream cooldown");
+        } else {
+            let catalog = client.fetch_shop_catalog().await;
+            catalog_success = catalog.success;
+            record_result_cooldown(pool, "shop_catalog", "all", &catalog, upstream_cooldown)
+                .await?;
+            let _ = persistence::persist_catalog(pool, catalog).await?;
+        }
     }
 
-    let wait_results = fetch_wait_results(client, &shops, upstream_concurrency).await;
+    let managed_changed = persistence::refresh_managed_locations(pool).await?;
+    if managed_changed > 0 {
+        tracing::info!(managed_changed, "refreshed managed locations");
+    }
+
+    let shops = persistence::managed_shops(pool).await?;
+    if shops.is_empty() {
+        tracing::warn!("no managed shops available to poll");
+        return Ok(catalog_success);
+    }
+
+    let wait_results = fetch_wait_results(
+        pool,
+        client,
+        &shops,
+        upstream_concurrency,
+        upstream_cooldown,
+    )
+    .await?;
     let wait_observed_at = persistence::persist_wait_times(pool, wait_results).await?;
 
-    let (notice_results, closing_notice_results) =
-        fetch_notice_results(client, &shops, upstream_concurrency).await;
-    let notice_observed_at =
-        persistence::persist_notices(pool, notice_results, closing_notice_results).await?;
+    let notice_observed_at = if poll_notices {
+        let (notice_results, closing_notice_results) = fetch_notice_results(
+            pool,
+            client,
+            &shops,
+            upstream_concurrency,
+            upstream_cooldown,
+        )
+        .await?;
+        persistence::persist_notices(pool, notice_results, closing_notice_results).await?
+    } else {
+        None
+    };
 
     if let Some(observed_at) = wait_observed_at.into_iter().chain(notice_observed_at).max() {
         publish_status_updated(pool, observed_at).await?;
@@ -106,12 +182,16 @@ async fn poll_once(
 }
 
 async fn fetch_wait_results(
+    pool: &sqlx::PgPool,
     client: &HeyTeaClient,
     shops: &[ShopRef],
     upstream_concurrency: usize,
-) -> Vec<PollResult<Vec<WaitTime>>> {
+    upstream_cooldown: Duration,
+) -> anyhow::Result<Vec<PollResult<Vec<WaitTime>>>> {
+    let active_cooldowns = persistence::active_cooldowns(pool, "wait_time").await?;
     let jobs = group_shop_ids_by_provider(shops)
         .into_iter()
+        .filter(|(provider, _)| !active_cooldowns.contains(&provider.cooldown_key()))
         .flat_map(|(provider, shop_ids)| {
             shop_ids
                 .chunks(provider.batch_size())
@@ -119,8 +199,11 @@ async fn fetch_wait_results(
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
+    if jobs.is_empty() {
+        tracing::warn!("all wait providers are cooling down or no wait jobs were available");
+    }
 
-    stream::iter(jobs)
+    let provider_results = stream::iter(jobs)
         .map(|(provider, batch)| {
             let client = client.clone();
             async move { fetch_wait_job(client, provider, batch).await }
@@ -130,17 +213,45 @@ async fn fetch_wait_results(
         .await
         .into_iter()
         .flatten()
-        .collect()
+        .collect::<Vec<_>>();
+
+    let mut results = Vec::with_capacity(provider_results.len());
+    for provider_result in provider_results {
+        record_result_cooldown(
+            pool,
+            "wait_time",
+            &provider_result.provider.cooldown_key(),
+            &provider_result.result,
+            upstream_cooldown,
+        )
+        .await?;
+        results.push(provider_result.result);
+    }
+    Ok(results)
+}
+
+struct ProviderPollResult<T> {
+    provider: WaitProvider,
+    result: PollResult<T>,
 }
 
 async fn fetch_wait_job(
     client: HeyTeaClient,
     provider: WaitProvider,
     batch: Vec<i64>,
-) -> Vec<PollResult<Vec<WaitTime>>> {
+) -> Vec<ProviderPollResult<Vec<WaitTime>>> {
     let result = client.fetch_wait_times(provider, &batch).await;
     if result.success || batch.len() <= 1 {
-        return vec![result];
+        return vec![ProviderPollResult { provider, result }];
+    }
+    if !should_retry_individual_waits(&result) {
+        tracing::warn!(
+            provider = ?provider,
+            batch_size = batch.len(),
+            status_code = ?result.status_code,
+            "wait batch failed without individual retry"
+        );
+        return vec![ProviderPollResult { provider, result }];
     }
 
     tracing::warn!(
@@ -148,12 +259,17 @@ async fn fetch_wait_job(
         batch_size = batch.len(),
         "wait batch failed; retrying individual shops"
     );
-    let mut results = vec![result];
+    let mut results = vec![ProviderPollResult { provider, result }];
     results.extend(
         stream::iter(batch)
             .map(|shop_id| {
                 let client = client.clone();
-                async move { client.fetch_wait_times(provider, &[shop_id]).await }
+                async move {
+                    ProviderPollResult {
+                        provider,
+                        result: client.fetch_wait_times(provider, &[shop_id]).await,
+                    }
+                }
             })
             .buffer_unordered(8)
             .collect::<Vec<_>>()
@@ -162,14 +278,22 @@ async fn fetch_wait_job(
     results
 }
 
+fn should_retry_individual_waits<T>(result: &PollResult<T>) -> bool {
+    !matches!(result.status_code, Some(403 | 405 | 429))
+}
+
 async fn fetch_notice_results(
+    pool: &sqlx::PgPool,
     client: &HeyTeaClient,
     shops: &[ShopRef],
     upstream_concurrency: usize,
-) -> (
+    upstream_cooldown: Duration,
+) -> anyhow::Result<(
     Vec<PollResult<StoreNotices>>,
     Vec<PollResult<StoreClosingNotices>>,
-) {
+)> {
+    let notice_cooldowns = persistence::active_cooldowns(pool, "notice").await?;
+    let closing_notice_cooldowns = persistence::active_cooldowns(pool, "closing_notice").await?;
     let jobs = shops
         .iter()
         .filter_map(|shop| {
@@ -184,6 +308,14 @@ async fn fetch_notice_results(
                 NoticeJob::Closing { provider, shop_id },
             ]
         })
+        .filter(|job| match job {
+            NoticeJob::Notice { provider, .. } => {
+                !notice_cooldowns.contains(&provider.cooldown_key())
+            }
+            NoticeJob::Closing { provider, .. } => {
+                !closing_notice_cooldowns.contains(&provider.cooldown_key())
+            }
+        })
         .collect::<Vec<_>>();
 
     let results = stream::iter(jobs)
@@ -191,12 +323,14 @@ async fn fetch_notice_results(
             let client = client.clone();
             async move {
                 match job {
-                    NoticeJob::Notice { provider, shop_id } => {
-                        NoticeJobResult::Notice(client.fetch_notice(provider, shop_id).await)
-                    }
-                    NoticeJob::Closing { provider, shop_id } => NoticeJobResult::Closing(
-                        client.fetch_closing_notice(provider, shop_id).await,
-                    ),
+                    NoticeJob::Notice { provider, shop_id } => NoticeJobResult::Notice {
+                        provider,
+                        result: client.fetch_notice(provider, shop_id).await,
+                    },
+                    NoticeJob::Closing { provider, shop_id } => NoticeJobResult::Closing {
+                        provider,
+                        result: client.fetch_closing_notice(provider, shop_id).await,
+                    },
                 }
             }
         })
@@ -208,11 +342,37 @@ async fn fetch_notice_results(
     let mut closing_notices = Vec::new();
     for result in results {
         match result {
-            NoticeJobResult::Notice(result) => notices.push(result),
-            NoticeJobResult::Closing(result) => closing_notices.push(result),
+            NoticeJobResult::Notice { provider, result } => {
+                if let Err(error) = record_result_cooldown(
+                    pool,
+                    "notice",
+                    &provider.cooldown_key(),
+                    &result,
+                    upstream_cooldown,
+                )
+                .await
+                {
+                    tracing::warn!(?error, "failed to record notice cooldown");
+                }
+                notices.push(result);
+            }
+            NoticeJobResult::Closing { provider, result } => {
+                if let Err(error) = record_result_cooldown(
+                    pool,
+                    "closing_notice",
+                    &provider.cooldown_key(),
+                    &result,
+                    upstream_cooldown,
+                )
+                .await
+                {
+                    tracing::warn!(?error, "failed to record closing notice cooldown");
+                }
+                closing_notices.push(result);
+            }
         }
     }
-    (notices, closing_notices)
+    Ok((notices, closing_notices))
 }
 
 enum NoticeJob {
@@ -227,8 +387,47 @@ enum NoticeJob {
 }
 
 enum NoticeJobResult {
-    Notice(PollResult<StoreNotices>),
-    Closing(PollResult<StoreClosingNotices>),
+    Notice {
+        provider: WaitProvider,
+        result: PollResult<StoreNotices>,
+    },
+    Closing {
+        provider: WaitProvider,
+        result: PollResult<StoreClosingNotices>,
+    },
+}
+
+async fn record_result_cooldown<T>(
+    pool: &sqlx::PgPool,
+    endpoint: &str,
+    provider_key: &str,
+    result: &PollResult<T>,
+    upstream_cooldown: Duration,
+) -> anyhow::Result<()> {
+    if !should_trip_provider_cooldown(result) {
+        return Ok(());
+    }
+
+    tracing::warn!(
+        endpoint,
+        provider_key,
+        status_code = ?result.status_code,
+        cooldown_seconds = upstream_cooldown.as_secs(),
+        "tripping upstream provider cooldown"
+    );
+    persistence::trip_provider_cooldown(
+        pool,
+        endpoint,
+        provider_key,
+        result.status_code,
+        result.error_message.as_deref(),
+        upstream_cooldown,
+    )
+    .await
+}
+
+fn should_trip_provider_cooldown<T>(result: &PollResult<T>) -> bool {
+    matches!(result.status_code, Some(403 | 405 | 429))
 }
 
 fn group_shop_ids_by_provider(shops: &[ShopRef]) -> BTreeMap<WaitProvider, Vec<i64>> {
@@ -266,4 +465,45 @@ fn env_u32(name: &str, default: u32) -> u32 {
         .and_then(|value| value.parse().ok())
         .filter(|value| *value > 0)
         .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result_with_status(status_code: Option<i32>) -> PollResult<()> {
+        PollResult {
+            value: None,
+            success: false,
+            status_code,
+            latency_ms: 0,
+            error_message: None,
+        }
+    }
+
+    #[test]
+    fn does_not_retry_individual_waits_for_access_denials_or_rate_limits() {
+        for status in [Some(403), Some(405), Some(429)] {
+            assert!(!should_retry_individual_waits(&result_with_status(status)));
+        }
+    }
+
+    #[test]
+    fn retries_individual_waits_for_unknown_failures() {
+        assert!(should_retry_individual_waits(&result_with_status(None)));
+        assert!(should_retry_individual_waits(&result_with_status(Some(
+            500
+        ))));
+    }
+
+    #[test]
+    fn trips_provider_cooldown_for_access_denials_or_rate_limits() {
+        for status in [Some(403), Some(405), Some(429)] {
+            assert!(should_trip_provider_cooldown(&result_with_status(status)));
+        }
+        assert!(!should_trip_provider_cooldown(&result_with_status(Some(
+            500
+        ))));
+        assert!(!should_trip_provider_cooldown(&result_with_status(None)));
+    }
 }

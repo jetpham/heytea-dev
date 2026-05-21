@@ -35,7 +35,7 @@
       {% for row in rows %}
         <li data-search="{{ row.search_text }}" data-latitude="{{ row.latitude }}" data-longitude="{{ row.longitude }}" data-distance="{{ row.distance }}" data-open="{{ row.open_sort }}" data-wait="{{ row.wait_sort }}" data-name="{{ row.name_sort }}">
           <a href="/{{ row.slug }}">{{ row.name }}</a>
-          <span class="meta"><span class="wait">{{ row.status_text }}</span><span class="distance"{% if row.distance_hidden %} hidden{% endif %}>{{ row.distance_text }}</span></span>
+          <span class="meta"><span class="wait">{{ row.status_text }}</span>, <span class="tracking">{{ row.tracking_text }}</span><span class="distance"{% if row.distance_hidden %} hidden{% endif %}>{{ row.distance_text }}</span></span>
         </li>
       {% endfor %}
     </ol>

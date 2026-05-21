@@ -113,17 +113,22 @@ async fn location_dashboard(
     let Some(location) = api_json::<LocationResponse>(&state, &location_path).await else {
         return Ok(not_found(headers).await);
     };
-    let status_path = format!("/locations/{}/status", path.slug);
-    let history_path = format!("/locations/{}/history?range=today", path.slug);
-    let (status, history) = tokio::join!(
-        api_json::<StatusResponse>(&state, &status_path),
-        api_json::<HistoryResponse>(&state, &history_path)
-    );
-    let stream_url = format!(
-        "{}/locations/{}/stream",
-        state.public_api_url.trim_end_matches('/'),
-        path.slug
-    );
+    let (status, history, stream_url) = if location.is_managed {
+        let status_path = format!("/locations/{}/status", path.slug);
+        let history_path = format!("/locations/{}/history?range=today", path.slug);
+        let (status, history) = tokio::join!(
+            api_json::<StatusResponse>(&state, &status_path),
+            api_json::<HistoryResponse>(&state, &history_path)
+        );
+        let stream_url = format!(
+            "{}/locations/{}/stream",
+            state.public_api_url.trim_end_matches('/'),
+            path.slug
+        );
+        (status, history, stream_url)
+    } else {
+        (None, None, String::new())
+    };
     let template =
         templates::DashboardTemplate::new(status, history, stream_url.clone(), location, evil);
     Ok((html_shell_headers(&stream_url), Html(template.render()?)).into_response())
@@ -243,16 +248,28 @@ async fn icon() -> impl IntoResponse {
 }
 
 async fn og_image(State(state): State<AppState>) -> impl IntoResponse {
-    let (status, history) = tokio::join!(
+    let (location, status, history) = tokio::join!(
+        api_json::<LocationResponse>(&state, "/locations/downtown-metreon"),
         api_json::<StatusResponse>(&state, "/locations/downtown-metreon/status"),
         api_json::<HistoryResponse>(&state, "/locations/downtown-metreon/history?range=today")
     );
-    let view = templates::DashboardView::new(
-        status.as_ref(),
-        history.as_ref(),
-        "downtown metreon",
-        "America/Los_Angeles",
-    );
+    let location = location.unwrap_or_else(|| LocationResponse {
+        slug: "downtown-metreon".to_string(),
+        name: "Downtown Metreon".to_string(),
+        address: "165 4th St, San Francisco, CA 94103".to_string(),
+        latitude: Some(37.784),
+        longitude: Some(-122.403),
+        timezone: "America/Los_Angeles".to_string(),
+        is_managed: true,
+        is_enabled: Some(true),
+        support_takeaway: Some(true),
+        is_open: None,
+        pickup_wait_minutes: None,
+        observed_at: None,
+        stale: true,
+        stale_after: None,
+    });
+    let view = templates::DashboardView::new(status.as_ref(), history.as_ref(), &location);
     svg_owned(og_svg(&view), "public, max-age=30, must-revalidate")
 }
 
@@ -445,11 +462,12 @@ fn svg_owned(body: String, cache_control: &str) -> impl IntoResponse {
 
 fn og_svg(view: &templates::DashboardView) -> String {
     let status_line = escape_xml(&view.status_line);
-    let graph = if view.closed {
+    let graph = if view.graph_hidden {
         String::new()
     } else {
         format!(
-            r##"<rect x="72" y="320" width="1056" height="220" fill="#fff" stroke="#000" stroke-width="4"/><g transform="translate(72 320) scale(10.56 5)"><polyline points="{}" fill="none" stroke="#000" stroke-width="4" stroke-linecap="square" stroke-linejoin="miter" vector-effect="non-scaling-stroke"/></g>"##,
+            r##"<rect x="72" y="320" width="1056" height="220" fill="#fff" stroke="#000" stroke-width="4"/><g transform="translate(72 320) scale(10.56 5)"><polyline points="{}" fill="none" stroke="#aaa" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter" vector-effect="non-scaling-stroke"/><polyline points="{}" fill="none" stroke="#000" stroke-width="4" stroke-linecap="square" stroke-linejoin="miter" vector-effect="non-scaling-stroke"/></g>"##,
+            escape_xml(&view.comparison_points),
             escape_xml(&view.trend_points)
         )
     };
@@ -692,17 +710,17 @@ fn site_error(status: StatusCode, message: &'static str) -> Response {
 
 const LLMS_TXT: &str = r#"# heytea.dev
 
-> Live wait time, catalog open state, notices, history, and location discovery for public HeyTea locations.
+> Location discovery for public HeyTea locations, with live wait time, stream, and history for managed locations.
 
 ## Endpoints
 
-- `GET https://api.heytea.dev/locations` - Public locations with catalog open state and current pickup wait.
-- `GET https://api.heytea.dev/locations/{slug}/status` - Current store state, wait time, notices, observed time, and staleAfter freshness.
+- `GET https://api.heytea.dev/locations` - Public locations with catalog metadata and `isManaged` tracking state.
+- `GET https://api.heytea.dev/locations/{slug}/status` - Current store state, wait time, notices, observed time, and staleAfter freshness for managed locations.
 - `GET https://api.heytea.dev/locations/{slug}/wait-time` - Current pickup, delivery, cups, and orders values.
 - `GET https://api.heytea.dev/locations/{slug}/notice` - Current store notices.
 - `GET https://api.heytea.dev/locations/{slug}/closing-notice` - Current closing notices.
-- `GET https://api.heytea.dev/locations/{slug}/history?range=today` - One-minute points for the current same-day open session.
-- `GET https://api.heytea.dev/locations/{slug}/stream` - Server-sent `status.updated` events.
+- `GET https://api.heytea.dev/locations/{slug}/history?range=today` - One-minute current-day points plus a seven-day minute-of-day comparison for managed locations.
+- `GET https://api.heytea.dev/locations/{slug}/stream` - Server-sent `status.updated` events for managed locations.
 - `GET https://api.heytea.dev/openapi.json` - OpenAPI schema.
 - `POST https://mcp.heytea.dev/mcp` - JSON-RPC 2.0 MCP endpoint.
 
@@ -712,7 +730,7 @@ No authentication is required. The API exposes public slugs, not upstream shop I
 
 ## Freshness
 
-Waits and notices are polled every 60 seconds. Catalog metadata, including open state, refreshes more slowly. Treat live wait data as fresh until `staleAfter`. HTTP `max-age` is based on `max(0, observedAt + pollInterval - now)`.
+Managed waits are polled every 60 seconds. Notices and catalog metadata refresh more slowly. Unmanaged locations keep static catalog metadata but do not have background wait polling, streams, or persisted history. Treat live wait data as fresh until `staleAfter`. HTTP `max-age` is based on `max(0, observedAt + pollInterval - now)`.
 
 ## Examples
 
@@ -734,7 +752,7 @@ const LLMS_FULL_TXT: &str = r#"# heytea.dev Full Context
 
 heytea.dev is a live status dashboard and public API for public HeyTea locations.
 
-The service discovers locations, polls safe public HeyTea app endpoints every 60 seconds, stores normalized observations in Postgres/TimescaleDB, and publishes live updates to connected browsers with Server-Sent Events. The public API never accepts or returns upstream shop IDs.
+The service discovers locations, polls a small managed set of safe public HeyTea app endpoints every 60 seconds, stores normalized observations in Postgres/TimescaleDB, and publishes live updates to connected browsers with Server-Sent Events. Unmanaged locations keep catalog metadata without background polling, streams, or persisted wait history. The public API never accepts or returns upstream shop IDs.
 
 Public surfaces:
 
@@ -771,7 +789,7 @@ MCP tools:
 
 Freshness model:
 
-Live values include `observedAt`, `stale`, and `staleAfter` when applicable. Data is expected to expire at the next poll boundary: `ttl_seconds = max(0, observedAt + poll_interval - now)`.
+Live values include `observedAt`, `stale`, and `staleAfter` when applicable. Managed wait data is expected to expire at the next poll boundary: `ttl_seconds = max(0, observedAt + poll_interval - now)`. Unmanaged status/history/stream endpoints return not-ready responses instead of stale historical waits.
 
 Restrictions:
 
@@ -789,14 +807,14 @@ Agents should use `staleAfter` and cache headers to avoid unnecessary refetches.
 
 const SKILL_MD: &str = r#"---
 name: heytea-status
-description: Query live wait time, catalog open state, notices, locations, and recent wait-time history for HeyTea.
+description: Query HeyTea locations and managed live wait time/history.
 ---
 
 # heytea-status
 
-Use this skill when a user asks about the current status or wait time for HeyTea locations.
+Use this skill when a user asks about HeyTea locations or current wait time for managed HeyTea locations.
 
-Call `GET https://api.heytea.dev/locations` to discover slugs. Use `GET https://api.heytea.dev/locations/{slug}/status` for current state and `GET https://api.heytea.dev/locations/{slug}/history?range=today` for the current-day trend. Use the MCP `list_locations`, `get_status`, or `get_history` tools when MCP is available.
+Call `GET https://api.heytea.dev/locations` to discover slugs and check `isManaged`. Use `GET https://api.heytea.dev/locations/{slug}/status` for current managed state and `GET https://api.heytea.dev/locations/{slug}/history?range=today` for the current-day trend plus seven-day comparison. Use the MCP `list_locations`, `get_status`, or `get_history` tools when MCP is available.
 "#;
 
 #[cfg(test)]

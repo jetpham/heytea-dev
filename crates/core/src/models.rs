@@ -22,6 +22,7 @@ pub struct LocationResponse {
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub timezone: String,
+    pub is_managed: bool,
     pub is_enabled: Option<bool>,
     pub support_takeaway: Option<bool>,
     pub is_open: Option<bool>,
@@ -116,6 +117,7 @@ pub struct HistoryResponse {
     pub range: String,
     pub generated_at: DateTime<Utc>,
     pub points: Vec<HistoryPoint>,
+    pub comparison_points: Vec<HistoryComparisonPoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -129,6 +131,14 @@ pub struct HistoryPoint {
     pub avg_delivery_estimate_minutes: Option<f64>,
     pub avg_making_cups: Option<f64>,
     pub avg_making_orders: Option<f64>,
+    pub sample_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryComparisonPoint {
+    pub minute_of_day: i32,
+    pub avg_pickup_wait_minutes: Option<f64>,
     pub sample_count: i64,
 }
 

@@ -86,10 +86,10 @@ in
         work_mem = lib.mkDefault "1MB";
         wal_buffers = lib.mkDefault "4MB";
         autovacuum_max_workers = lib.mkDefault 1;
-        max_worker_processes = lib.mkDefault 4;
+        max_worker_processes = lib.mkDefault 10;
         max_parallel_workers = lib.mkDefault 0;
         max_parallel_workers_per_gather = lib.mkDefault 0;
-        "timescaledb.max_background_workers" = lib.mkDefault 2;
+        "timescaledb.max_background_workers" = lib.mkDefault 6;
       };
       authentication = lib.mkForce ''
         local all all peer
@@ -166,8 +166,11 @@ in
         DATABASE_URL = "postgresql:///heytea?host=/run/postgresql&user=heytea";
         HEYTEA_POLLER_INTERVAL_SECONDS = "60";
         HEYTEA_CATALOG_INTERVAL_SECONDS = "86400";
+        HEYTEA_CATALOG_RETRY_INTERVAL_SECONDS = "900";
+        HEYTEA_NOTICE_INTERVAL_SECONDS = "86400";
+        HEYTEA_UPSTREAM_COOLDOWN_SECONDS = "3600";
         HEYTEA_POLLER_MAX_CONNECTIONS = "2";
-        HEYTEA_UPSTREAM_CONCURRENCY = "6";
+        HEYTEA_UPSTREAM_CONCURRENCY = "2";
         RUST_LOG = "info";
       };
     };

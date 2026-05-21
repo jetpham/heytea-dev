@@ -171,6 +171,112 @@
             '';
           };
 
+          heyteaAdmin = pkgs.writeShellScriptBin "heytea-admin" ''
+            set -euo pipefail
+
+            psql=${pkgs.postgresql_16}/bin/psql
+            db_url="''${DATABASE_URL:-postgresql:///heytea?host=/run/postgresql&user=heytea}"
+
+            usage() {
+              printf '%s\n' \
+                'usage: heytea-admin <command> [args]' \
+                "" \
+                'commands:' \
+                '  managed list              list active managed locations' \
+                '  managed list-all          list every location with managed state' \
+                '  managed add <slug> [note] add or reactivate a managed override' \
+                '  managed remove <slug>     force a location unmanaged' \
+                '  managed recompute         recompute region/manual managed state' \
+                '  managed regions           list managed seed regions' >&2
+            }
+
+            run_psql() {
+              "$psql" -v ON_ERROR_STOP=1 -P pager=off "$db_url" "$@"
+            }
+
+            require_slug() {
+              if [ "$#" -lt 1 ] || [ -z "''${1:-}" ]; then
+                usage
+                exit 2
+              fi
+            }
+
+            if [ "$#" -lt 1 ]; then
+              usage
+              exit 2
+            fi
+
+            scope="$1"
+            shift
+            if [ "$scope" != managed ]; then
+              usage
+              exit 2
+            fi
+
+            command="''${1:-list}"
+            if [ "$#" -gt 0 ]; then
+              shift
+            fi
+
+            case "$command" in
+              list)
+                run_psql -c "select refresh_managed_locations();" >/dev/null
+                run_psql -c "select l.slug, l.name, l.address, ml.source, ml.reason from managed_locations ml join locations l on l.shop_id = ml.shop_id where ml.is_active is true order by l.name;"
+                ;;
+              list-all)
+                run_psql -c "select refresh_managed_locations();" >/dev/null
+                run_psql -c "select l.slug, l.name, case when ml.is_active is true then 'managed' else 'unmanaged' end as state, coalesce(ml.source, '-') as source, coalesce(ml.reason, '-') as reason from locations l left join managed_locations ml on ml.shop_id = l.shop_id where coalesce(l.is_enabled, true) is true order by state, l.name;"
+                ;;
+              add)
+                require_slug "$@"
+                slug="$1"
+                note="''${2:-manual override}"
+                "$psql" -v ON_ERROR_STOP=1 -P pager=off -v slug="$slug" -v note="$note" "$db_url" <<'SQL'
+            with target as (
+              select shop_id from locations where slug = :'slug'
+            )
+            insert into managed_location_overrides (shop_id, is_managed, note, updated_at)
+            select shop_id, true, :'note', now()
+            from target
+            on conflict (shop_id) do update set
+              is_managed = true,
+              note = excluded.note,
+              updated_at = now();
+
+            select refresh_managed_locations();
+SQL
+                ;;
+              remove)
+                require_slug "$@"
+                slug="$1"
+                "$psql" -v ON_ERROR_STOP=1 -P pager=off -v slug="$slug" "$db_url" <<'SQL'
+            with target as (
+              select shop_id from locations where slug = :'slug'
+            )
+            insert into managed_location_overrides (shop_id, is_managed, note, updated_at)
+            select shop_id, false, 'manual unmanaged override', now()
+            from target
+            on conflict (shop_id) do update set
+              is_managed = false,
+              note = excluded.note,
+              updated_at = now();
+
+            select refresh_managed_locations();
+SQL
+                ;;
+              recompute)
+                run_psql -c "select refresh_managed_locations();"
+                ;;
+              regions)
+                run_psql -c "select slug, label, latitude, longitude, radius_miles, is_enabled from managed_regions order by slug;"
+                ;;
+              *)
+                usage
+                exit 2
+                ;;
+            esac
+          '';
+
         in
         {
           packages = rec {
@@ -181,6 +287,7 @@
             heytea-cli = rustBinary { package = "heytea-cli"; };
             heytea-site-assets = siteAssets;
             heytea-site = site;
+            heytea-admin = heyteaAdmin;
             heytea-migrations = migrations;
             dbip-city-lite-mmdb = dbipCityLiteMmdb;
             heytea = heytea-cli;
@@ -243,6 +350,18 @@
                 "$@"
             ''}";
             meta.description = "Deploy heytea.dev with deploy-rs rollback protection";
+          };
+
+          apps.admin = {
+            type = "app";
+            program = "${heyteaAdmin}/bin/heytea-admin";
+            meta.description = "Administer heytea.dev managed tracking state";
+          };
+
+          apps.managed = {
+            type = "app";
+            program = "${heyteaAdmin}/bin/heytea-admin";
+            meta.description = "Alias for heytea-admin managed tracking commands";
           };
         }) // {
       nixosModules.heytea = import ./nix/modules/heytea.nix;

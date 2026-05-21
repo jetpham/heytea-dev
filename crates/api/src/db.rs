@@ -1,8 +1,8 @@
 use crate::error::ApiError;
 use chrono::{DateTime, TimeDelta, Utc};
 use heytea_core::{
-    ClosingNoticeResponse, HistoryPoint, HistoryRange, HistoryResponse, LocationResponse,
-    LocationsResponse, NoticeResponse, StatusResponse, WaitTimeResponse,
+    ClosingNoticeResponse, HistoryComparisonPoint, HistoryPoint, HistoryRange, HistoryResponse,
+    LocationResponse, LocationsResponse, NoticeResponse, StatusResponse, WaitTimeResponse,
     DEFAULT_STALE_AFTER_SECONDS,
 };
 use sqlx::FromRow;
@@ -15,6 +15,7 @@ struct LocationRow {
     latitude: Option<f64>,
     longitude: Option<f64>,
     timezone: String,
+    is_managed: bool,
     is_enabled: Option<bool>,
     support_takeaway: Option<bool>,
     is_open: Option<bool>,
@@ -24,6 +25,7 @@ struct LocationRow {
 
 #[derive(Debug, FromRow)]
 struct CurrentStatusRow {
+    is_managed: bool,
     name: String,
     address: String,
     is_open: Option<bool>,
@@ -62,17 +64,20 @@ pub async fn locations(pool: &sqlx::PgPool) -> Result<LocationsResponse, ApiErro
           l.latitude,
           l.longitude,
           l.timezone,
+          ml.shop_id is not null as is_managed,
           l.is_enabled,
           l.support_takeaway,
-          s.is_open,
-          s.pickup_wait_minutes,
-          s.wait_observed_at as observed_at
+          case when ml.shop_id is not null then coalesce(s.is_open, l.is_open) else l.is_open end as is_open,
+          case when ml.shop_id is not null then s.pickup_wait_minutes end as pickup_wait_minutes,
+          case when ml.shop_id is not null then s.wait_observed_at end as observed_at
         from locations l
+        left join managed_locations ml on ml.shop_id = l.shop_id and ml.is_active is true
         left join location_current_status s on s.shop_id = l.shop_id
         where coalesce(l.is_enabled, true) is true
         order by
-          s.is_open desc nulls last,
-          s.pickup_wait_minutes asc nulls last,
+          (ml.shop_id is not null) desc,
+          case when ml.shop_id is not null then coalesce(s.is_open, l.is_open) else l.is_open end desc nulls last,
+          case when ml.shop_id is not null then s.pickup_wait_minutes end asc nulls last,
           l.name asc
         "#,
     )
@@ -100,12 +105,14 @@ async fn location_row(pool: &sqlx::PgPool, slug: &str) -> Result<LocationRow, Ap
           l.latitude,
           l.longitude,
           l.timezone,
+          ml.shop_id is not null as is_managed,
           l.is_enabled,
           l.support_takeaway,
-          s.is_open,
-          s.pickup_wait_minutes,
-          s.wait_observed_at as observed_at
+          case when ml.shop_id is not null then coalesce(s.is_open, l.is_open) else l.is_open end as is_open,
+          case when ml.shop_id is not null then s.pickup_wait_minutes end as pickup_wait_minutes,
+          case when ml.shop_id is not null then s.wait_observed_at end as observed_at
         from locations l
+        left join managed_locations ml on ml.shop_id = l.shop_id and ml.is_active is true
         left join location_current_status s on s.shop_id = l.shop_id
         where l.slug = $1
         limit 1
@@ -126,13 +133,17 @@ fn location_response(row: LocationRow) -> LocationResponse {
         latitude: row.latitude,
         longitude: row.longitude,
         timezone: row.timezone,
+        is_managed: row.is_managed,
         is_enabled: row.is_enabled,
         support_takeaway: row.support_takeaway,
         is_open: row.is_open,
         pickup_wait_minutes: row.pickup_wait_minutes,
         observed_at: row.observed_at,
-        stale: row.observed_at.map(is_stale).unwrap_or(true),
-        stale_after: row.observed_at.map(stale_after),
+        stale: !row.is_managed || row.observed_at.map(is_stale).unwrap_or(true),
+        stale_after: row
+            .is_managed
+            .then(|| row.observed_at.map(stale_after))
+            .flatten(),
     }
 }
 
@@ -140,22 +151,24 @@ async fn current_status_row(pool: &sqlx::PgPool, slug: &str) -> Result<CurrentSt
     let row = sqlx::query_as::<_, CurrentStatusRow>(
         r#"
         select
+          ml.shop_id is not null as is_managed,
           l.name,
           l.address,
-          s.is_open,
+          coalesce(s.is_open, l.is_open) as is_open,
           s.pickup_wait_minutes,
           s.delivery_estimate_minutes,
           s.making_cups,
           s.making_orders,
           s.is_estimate,
           s.wait_text as text,
-          s.notices,
-          s.closing_notices,
+          coalesce(s.notices, '{}'::text[]) as notices,
+          coalesce(s.closing_notices, '{}'::text[]) as closing_notices,
           s.wait_observed_at as observed_at,
           s.notices_observed_at,
           s.closing_notices_observed_at
         from locations l
-        join location_current_status s on s.shop_id = l.shop_id
+        left join managed_locations ml on ml.shop_id = l.shop_id and ml.is_active is true
+        left join location_current_status s on s.shop_id = l.shop_id
         where l.slug = $1
         limit 1
         "#,
@@ -165,6 +178,9 @@ async fn current_status_row(pool: &sqlx::PgPool, slug: &str) -> Result<CurrentSt
     .await?;
 
     match row {
+        Some(row) if !row.is_managed => Err(ApiError::not_ready(
+            "live status is only available for managed locations",
+        )),
         Some(row) if row.observed_at.is_some() => Ok(row),
         Some(_) => Err(ApiError::not_ready("wait time has not been observed yet")),
         None => {
@@ -244,6 +260,9 @@ pub async fn schema_ready(pool: &sqlx::PgPool) -> bool {
           and to_regclass('public.location_current_status') is not null
           and to_regclass('public.location_wait_time_observations') is not null
           and to_regclass('public.location_wait_time_1m') is not null
+          and to_regclass('public.managed_regions') is not null
+          and to_regclass('public.managed_locations') is not null
+          and to_regclass('public.upstream_provider_cooldowns') is not null
           and exists (select 1 from pg_extension where extname = 'timescaledb')
         "#,
     )
@@ -264,12 +283,24 @@ struct HistoryPointRow {
     sample_count: i64,
 }
 
+#[derive(Debug, FromRow)]
+struct HistoryComparisonPointRow {
+    minute_of_day: i32,
+    avg_pickup_wait_minutes: Option<f64>,
+    sample_count: i64,
+}
+
 pub async fn history_for_slug(
     pool: &sqlx::PgPool,
     slug: &str,
     range: HistoryRange,
 ) -> Result<HistoryResponse, ApiError> {
-    location_row(pool, slug).await?;
+    let location = location_row(pool, slug).await?;
+    if !location.is_managed {
+        return Err(ApiError::not_ready(
+            "history is only available for managed locations",
+        ));
+    }
 
     let sql = match range {
         HistoryRange::Today => r#"
@@ -344,6 +375,40 @@ pub async fn history_for_slug(
         .bind(slug)
         .fetch_all(pool)
         .await?;
+    let comparison_rows = if matches!(range, HistoryRange::Today) {
+        sqlx::query_as::<_, HistoryComparisonPointRow>(
+            r#"
+            with location as (
+              select l.shop_id, l.timezone
+              from locations l
+              where l.slug = $1
+            ), bounds as (
+              select
+                date_trunc('day', now() at time zone location.timezone) at time zone location.timezone as today_start,
+                (date_trunc('day', now() at time zone location.timezone) - '7 days'::interval) at time zone location.timezone as comparison_start
+              from location
+            )
+            select
+              (
+                extract(hour from w.bucket at time zone location.timezone)::int * 60 +
+                extract(minute from w.bucket at time zone location.timezone)::int
+              )::int as minute_of_day,
+              avg(w.avg_pickup_wait_minutes)::float8 as avg_pickup_wait_minutes,
+              sum(w.sample_count)::int8 as sample_count
+            from location_wait_time_1m w, location, bounds
+            where w.shop_id = location.shop_id
+              and w.bucket >= bounds.comparison_start
+              and w.bucket < bounds.today_start
+            group by 1
+            order by 1 asc
+            "#,
+        )
+        .bind(slug)
+        .fetch_all(pool)
+        .await?
+    } else {
+        Vec::new()
+    };
 
     Ok(HistoryResponse {
         range: range.to_string(),
@@ -359,6 +424,14 @@ pub async fn history_for_slug(
                 avg_delivery_estimate_minutes: row.avg_delivery_estimate_minutes,
                 avg_making_cups: row.avg_making_cups,
                 avg_making_orders: row.avg_making_orders,
+                sample_count: row.sample_count,
+            })
+            .collect(),
+        comparison_points: comparison_rows
+            .into_iter()
+            .map(|row| HistoryComparisonPoint {
+                minute_of_day: row.minute_of_day,
+                avg_pickup_wait_minutes: row.avg_pickup_wait_minutes,
                 sample_count: row.sample_count,
             })
             .collect(),
