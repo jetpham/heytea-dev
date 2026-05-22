@@ -621,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn about_template_renders_editable_placeholder() {
+    fn about_template_renders_origin_story() {
         let template = AboutTemplate {
             favicon_href: svg_data_uri(&favicon_svg()),
             inline_css: dashboard_css(),
@@ -630,7 +630,7 @@ mod tests {
         let html = template.render().expect("render about");
 
         assert!(html.contains("about heytea.dev"));
-        assert!(html.contains("Write the about page here."));
+        assert!(html.contains("heytea.dev started because i wanted to meet friends at HeyTea"));
         assert!(html.contains("https://heytea.dev/about"));
     }
 
