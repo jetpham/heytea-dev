@@ -128,12 +128,7 @@ pub(crate) async fn location_stream(
     State(state): State<AppState>,
     Path(path): Path<LocationPath>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let location = db::location(&state.pool, &path.slug).await?;
-    if !location.is_managed {
-        return Err(ApiError::not_ready(
-            "status stream is only available for managed locations",
-        ));
-    }
+    db::location(&state.pool, &path.slug).await?;
     Ok(stream_for_slug(state, path.slug).await)
 }
 

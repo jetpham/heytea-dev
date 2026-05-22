@@ -25,6 +25,7 @@
   <nav aria-label="main">
     <a class="brand" href="https://heytea.dev/">heytea.dev</a>
     <span class="links">
+      <a href="https://heytea.dev/about">about</a>
       <a href="https://docs.heytea.dev/">docs</a>
       <a href="https://status.heytea.dev/">status</a>
       <a href="https://crates.io/crates/heytea">crate</a>
@@ -33,20 +34,11 @@
   </nav>
   <main id="app" data-managed="{{ managed }}" data-stream-url="{{ stream_url }}" data-location-name="{{ location_name }}" data-timezone="{{ timezone }}" data-open="{{ open }}" data-wait="{{ wait_minutes }}" data-observed-at="{{ observed_at }}">
     <p id="status" aria-live="polite">{{ status_line }}</p>
-    {% if managed %}
     <svg id="graph" viewBox="0 0 100 40" preserveAspectRatio="none" aria-label="pickup wait history with seven-day comparison" role="img"{% if graph_hidden %} hidden{% endif %}>
       <polyline id="comparison" data-v="{{ comparison_data }}" points="{{ comparison_points }}"></polyline>
       <polyline id="trend" data-v="{{ trend_data }}" data-m="{{ trend_minute }}" points="{{ trend_points }}"></polyline>
     </svg>
     <p class="status-note">black is today. gray is the previous seven-day minute average.</p>
-    {% else %}
-    <section class="request-card" aria-labelledby="request-title">
-      <h1 id="request-title">request managed tracking</h1>
-      <p>{{ address }}</p>
-      <p>this store has catalog metadata, but no background wait polling, stream, or saved history yet.</p>
-      <a class="button" href="{{ request_tracking_href }}">email tracking request</a>
-    </section>
-    {% endif %}
   </main>
   <footer>
     <span>made by <a href="https://jetpham.com">jet</a></span>

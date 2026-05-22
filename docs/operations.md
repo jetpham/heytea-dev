@@ -23,19 +23,19 @@ Web domains are Cloudflare-proxied. The origin firewall accepts TCP `80` and `44
 
 Postgres uses the local Unix socket with peer authentication. It should not bind to Caddy or public interfaces. Separate dashboards, collectors, and analytics apps are not part of the minimal production runtime.
 
-## Managed Tracking
+## Tracking
 
-The poller only performs every-minute wait polling for effective managed locations. Managed state is derived from seeded regions plus manual overrides in Postgres:
+The poller tracks all enabled catalog locations. Wait polling is scheduled independently per upstream provider region and paced by `HEYTEA_WAIT_PROVIDER_MAX_REQUESTS_PER_MINUTE` so each region stays within its configured request rate. Raw observations are stored at exact timestamps, and API history interpolates those observations onto one-minute buckets for current-day and seven-day comparison graphs.
+
+Managed state is still available for operational grouping and notice polling. It is derived from seeded regions plus manual overrides in Postgres:
 
 - Seed regions: San Francisco Bay Area and London.
 - Manual admin: `nix run .#admin -- managed list`, `managed add <slug> [note]`, `managed remove <slug>`, `managed recompute`, and `managed regions`.
 - Run admin commands on the host over Tailscale admin SSH so the default `DATABASE_URL=postgresql:///heytea?host=/run/postgresql&user=heytea` reaches the local socket.
 
-Unmanaged locations remain visible in the finder and have static store pages, but they do not get background wait polling, streams, or persisted history. Store pages include a `mailto:` request to `jet@extremist.software` for managed tracking requests.
-
 ## Upstream Safety
 
-Catalog refresh defaults to once per day with a slower retry interval after failure. Notices refresh daily, not every minute. Wait polling is limited to managed locations with low upstream concurrency. Upstream `403`, `405`, and `429` responses trip a provider cooldown in `upstream_provider_cooldowns`; the poller skips cooled-down providers instead of retrying every shop individually.
+Catalog refresh defaults to once per day with a slower retry interval after failure. Notices refresh daily, not every minute. Wait polling is batched by provider and paced per region with low upstream concurrency. Upstream `403`, `405`, and `429` responses trip a provider cooldown in `upstream_provider_cooldowns`; the poller skips cooled-down providers instead of retrying every shop individually.
 
 ## Backups
 

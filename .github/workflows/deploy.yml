@@ -2,6 +2,11 @@ name: Deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      origin_ipv4:
+        description: Origin IPv4 for Cloudflare DNS cutover. Defaults to the current apex A record.
+        required: false
+        type: string
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -35,6 +40,7 @@ jobs:
         id: cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ORIGIN_IPV4: ${{ github.event.inputs.origin_ipv4 || '' }}
         run: |
           nix develop --accept-flake-config -c bash -s <<'SCRIPT'
           set -euo pipefail
@@ -49,7 +55,8 @@ jobs:
           auth_header=(--header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" --header "Content-Type: application/json")
 
           zone_id=$(curl -fsS -G "${auth_header[@]}" --data-urlencode "name=${zone_name}" "${api_base}/zones" | jq -er '.result[0].id')
-          origin_ipv4=$(curl -fsS -G "${auth_header[@]}" --data-urlencode "type=A" --data-urlencode "name=${zone_name}" "${api_base}/zones/${zone_id}/dns_records" | jq -er '.result[0].content')
+          current_origin_ipv4=$(curl -fsS -G "${auth_header[@]}" --data-urlencode "type=A" --data-urlencode "name=${zone_name}" "${api_base}/zones/${zone_id}/dns_records" | jq -er '.result[0].content')
+          origin_ipv4=${ORIGIN_IPV4:-$current_origin_ipv4}
 
           upsert_a_record() {
             local name=$1
@@ -97,7 +104,7 @@ jobs:
               -o BatchMode=yes \
               -o ConnectTimeout=8 \
               -o StrictHostKeyChecking=accept-new \
-              root@heytea-dev-1 'printf deploy-ready' 2>/dev/null || true
+              root@heytea-dev-2 'printf deploy-ready' 2>/dev/null || true
           }
 
           if [ "$(probe 2222)" = deploy-ready ]; then
@@ -105,12 +112,12 @@ jobs:
           elif [ "$(probe 22)" = deploy-ready ]; then
             port=22
           else
-            echo "could not reach admin OpenSSH on heytea-dev-1 port 2222 or bootstrap port 22" >&2
+            echo "could not reach admin OpenSSH on heytea-dev-2 port 2222 or bootstrap port 22" >&2
             exit 1
           fi
 
           cat > ~/.ssh/config <<EOF
-          Host heytea-dev-1
+          Host heytea-dev-2
             User root
             Port $port
             StrictHostKeyChecking accept-new
@@ -130,7 +137,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          ssh heytea-dev-1 'set -euo pipefail
+          ssh heytea-dev-2 'set -euo pipefail
             curl -fsS -H "X-Forwarded-For: 8.8.8.8" http://127.0.0.1:3100/ -o /tmp/heytea-geoip-check.html
             grep -q "server location guess: Mountain View" /tmp/heytea-geoip-check.html
             grep -q "data-search=\"sunnyvale" /tmp/heytea-geoip-check.html

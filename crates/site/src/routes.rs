@@ -21,6 +21,7 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .route("/", any(finder))
+        .route("/about", get(about))
         .route("/status", get(status))
         .route("/docs", get(docs))
         .route("/robots.txt", get(robots))
@@ -113,25 +114,29 @@ async fn location_dashboard(
     let Some(location) = api_json::<LocationResponse>(&state, &location_path).await else {
         return Ok(not_found(headers).await);
     };
-    let (status, history, stream_url) = if location.is_managed {
-        let status_path = format!("/locations/{}/status", path.slug);
-        let history_path = format!("/locations/{}/history?range=today", path.slug);
-        let (status, history) = tokio::join!(
-            api_json::<StatusResponse>(&state, &status_path),
-            api_json::<HistoryResponse>(&state, &history_path)
-        );
-        let stream_url = format!(
-            "{}/locations/{}/stream",
-            state.public_api_url.trim_end_matches('/'),
-            path.slug
-        );
-        (status, history, stream_url)
-    } else {
-        (None, None, String::new())
-    };
+    let status_path = format!("/locations/{}/status", path.slug);
+    let history_path = format!("/locations/{}/history?range=today", path.slug);
+    let (status, history) = tokio::join!(
+        api_json::<StatusResponse>(&state, &status_path),
+        api_json::<HistoryResponse>(&state, &history_path)
+    );
+    let stream_url = format!(
+        "{}/locations/{}/stream",
+        state.public_api_url.trim_end_matches('/'),
+        path.slug
+    );
     let template =
         templates::DashboardTemplate::new(status, history, stream_url.clone(), location, evil);
     Ok((html_shell_headers(&stream_url), Html(template.render()?)).into_response())
+}
+
+async fn about(headers: HeaderMap) -> Result<Response, SiteError> {
+    let template = templates::AboutTemplate {
+        favicon_href: templates::svg_data_uri(&templates::favicon_svg()),
+        inline_css: templates::dashboard_css(),
+        evil: evil_request(&headers),
+    };
+    Ok((html_shell_headers(""), Html(template.render()?)).into_response())
 }
 
 async fn status(State(state): State<AppState>) -> Result<Response, SiteError> {
@@ -710,17 +715,17 @@ fn site_error(status: StatusCode, message: &'static str) -> Response {
 
 const LLMS_TXT: &str = r#"# heytea.dev
 
-> Location discovery for public HeyTea locations, with live wait time, stream, and history for managed locations.
+> Location discovery for public HeyTea locations, with live wait time, stream, and history for tracked locations.
 
 ## Endpoints
 
-- `GET https://api.heytea.dev/locations` - Public locations with catalog metadata and `isManaged` tracking state.
-- `GET https://api.heytea.dev/locations/{slug}/status` - Current store state, wait time, notices, observed time, and staleAfter freshness for managed locations.
+- `GET https://api.heytea.dev/locations` - Public locations with catalog metadata and tracking state.
+- `GET https://api.heytea.dev/locations/{slug}/status` - Current store state, wait time, notices, observed time, and staleAfter freshness.
 - `GET https://api.heytea.dev/locations/{slug}/wait-time` - Current pickup, delivery, cups, and orders values.
 - `GET https://api.heytea.dev/locations/{slug}/notice` - Current store notices.
 - `GET https://api.heytea.dev/locations/{slug}/closing-notice` - Current closing notices.
-- `GET https://api.heytea.dev/locations/{slug}/history?range=today` - One-minute current-day points plus a seven-day minute-of-day comparison for managed locations.
-- `GET https://api.heytea.dev/locations/{slug}/stream` - Server-sent `status.updated` events for managed locations.
+- `GET https://api.heytea.dev/locations/{slug}/history?range=today` - Interpolated one-minute current-day points plus a seven-day minute-of-day comparison.
+- `GET https://api.heytea.dev/locations/{slug}/stream` - Server-sent `status.updated` events.
 - `GET https://api.heytea.dev/openapi.json` - OpenAPI schema.
 - `POST https://mcp.heytea.dev/mcp` - JSON-RPC 2.0 MCP endpoint.
 
@@ -730,7 +735,7 @@ No authentication is required. The API exposes public slugs, not upstream shop I
 
 ## Freshness
 
-Managed waits are polled every 60 seconds. Notices and catalog metadata refresh more slowly. Unmanaged locations keep static catalog metadata but do not have background wait polling, streams, or persisted history. Treat live wait data as fresh until `staleAfter`. HTTP `max-age` is based on `max(0, observedAt + pollInterval - now)`.
+Waits are polled continuously by provider region with a configured per-region request cap. Notices and catalog metadata refresh more slowly. Treat live wait data as fresh until `staleAfter`. HTTP `max-age` is based on `max(0, staleAfter - now)`.
 
 ## Examples
 
@@ -752,7 +757,7 @@ const LLMS_FULL_TXT: &str = r#"# heytea.dev Full Context
 
 heytea.dev is a live status dashboard and public API for public HeyTea locations.
 
-The service discovers locations, polls a small managed set of safe public HeyTea app endpoints every 60 seconds, stores normalized observations in Postgres/TimescaleDB, and publishes live updates to connected browsers with Server-Sent Events. Unmanaged locations keep catalog metadata without background polling, streams, or persisted wait history. The public API never accepts or returns upstream shop IDs.
+The service discovers locations, polls safe public HeyTea app endpoints with per-provider pacing, stores normalized observations in Postgres/TimescaleDB, and publishes live updates to connected browsers with Server-Sent Events. The public API never accepts or returns upstream shop IDs.
 
 Public surfaces:
 
@@ -789,7 +794,7 @@ MCP tools:
 
 Freshness model:
 
-Live values include `observedAt`, `stale`, and `staleAfter` when applicable. Managed wait data is expected to expire at the next poll boundary: `ttl_seconds = max(0, observedAt + poll_interval - now)`. Unmanaged status/history/stream endpoints return not-ready responses instead of stale historical waits.
+Live values include `observedAt`, `stale`, and `staleAfter` when applicable. Wait data is polled by provider region within the configured upstream request rate, and history points are interpolated onto one-minute buckets from exact observation timestamps.
 
 Restrictions:
 
@@ -807,14 +812,14 @@ Agents should use `staleAfter` and cache headers to avoid unnecessary refetches.
 
 const SKILL_MD: &str = r#"---
 name: heytea-status
-description: Query HeyTea locations and managed live wait time/history.
+description: Query HeyTea locations and live wait time/history.
 ---
 
 # heytea-status
 
-Use this skill when a user asks about HeyTea locations or current wait time for managed HeyTea locations.
+Use this skill when a user asks about HeyTea locations or current wait time for HeyTea locations.
 
-Call `GET https://api.heytea.dev/locations` to discover slugs and check `isManaged`. Use `GET https://api.heytea.dev/locations/{slug}/status` for current managed state and `GET https://api.heytea.dev/locations/{slug}/history?range=today` for the current-day trend plus seven-day comparison. Use the MCP `list_locations`, `get_status`, or `get_history` tools when MCP is available.
+Call `GET https://api.heytea.dev/locations` to discover slugs. Use `GET https://api.heytea.dev/locations/{slug}/status` for current state and `GET https://api.heytea.dev/locations/{slug}/history?range=today` for the current-day trend plus seven-day comparison. Use the MCP `list_locations`, `get_status`, or `get_history` tools when MCP is available.
 "#;
 
 #[cfg(test)]

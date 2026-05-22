@@ -1,11 +1,13 @@
 use crate::error::ApiError;
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Datelike, TimeDelta, TimeZone, Utc};
+use chrono_tz::{America::Los_Angeles, Tz};
 use heytea_core::{
     ClosingNoticeResponse, HistoryComparisonPoint, HistoryPoint, HistoryRange, HistoryResponse,
     LocationResponse, LocationsResponse, NoticeResponse, StatusResponse, WaitTimeResponse,
     DEFAULT_STALE_AFTER_SECONDS,
 };
 use sqlx::FromRow;
+use std::collections::BTreeMap;
 
 #[derive(Debug, FromRow)]
 struct LocationRow {
@@ -25,7 +27,6 @@ struct LocationRow {
 
 #[derive(Debug, FromRow)]
 struct CurrentStatusRow {
-    is_managed: bool,
     name: String,
     address: String,
     is_open: Option<bool>,
@@ -64,20 +65,18 @@ pub async fn locations(pool: &sqlx::PgPool) -> Result<LocationsResponse, ApiErro
           l.latitude,
           l.longitude,
           l.timezone,
-          ml.shop_id is not null as is_managed,
+          true as is_managed,
           l.is_enabled,
           l.support_takeaway,
-          case when ml.shop_id is not null then coalesce(s.is_open, l.is_open) else l.is_open end as is_open,
-          case when ml.shop_id is not null then s.pickup_wait_minutes end as pickup_wait_minutes,
-          case when ml.shop_id is not null then s.wait_observed_at end as observed_at
+          coalesce(s.is_open, l.is_open) as is_open,
+          s.pickup_wait_minutes,
+          s.wait_observed_at as observed_at
         from locations l
-        left join managed_locations ml on ml.shop_id = l.shop_id and ml.is_active is true
         left join location_current_status s on s.shop_id = l.shop_id
         where coalesce(l.is_enabled, true) is true
         order by
-          (ml.shop_id is not null) desc,
-          case when ml.shop_id is not null then coalesce(s.is_open, l.is_open) else l.is_open end desc nulls last,
-          case when ml.shop_id is not null then s.pickup_wait_minutes end asc nulls last,
+          coalesce(s.is_open, l.is_open) desc nulls last,
+          s.pickup_wait_minutes asc nulls last,
           l.name asc
         "#,
     )
@@ -105,14 +104,13 @@ async fn location_row(pool: &sqlx::PgPool, slug: &str) -> Result<LocationRow, Ap
           l.latitude,
           l.longitude,
           l.timezone,
-          ml.shop_id is not null as is_managed,
+          true as is_managed,
           l.is_enabled,
           l.support_takeaway,
-          case when ml.shop_id is not null then coalesce(s.is_open, l.is_open) else l.is_open end as is_open,
-          case when ml.shop_id is not null then s.pickup_wait_minutes end as pickup_wait_minutes,
-          case when ml.shop_id is not null then s.wait_observed_at end as observed_at
+          coalesce(s.is_open, l.is_open) as is_open,
+          s.pickup_wait_minutes,
+          s.wait_observed_at as observed_at
         from locations l
-        left join managed_locations ml on ml.shop_id = l.shop_id and ml.is_active is true
         left join location_current_status s on s.shop_id = l.shop_id
         where l.slug = $1
         limit 1
@@ -139,11 +137,8 @@ fn location_response(row: LocationRow) -> LocationResponse {
         is_open: row.is_open,
         pickup_wait_minutes: row.pickup_wait_minutes,
         observed_at: row.observed_at,
-        stale: !row.is_managed || row.observed_at.map(is_stale).unwrap_or(true),
-        stale_after: row
-            .is_managed
-            .then(|| row.observed_at.map(stale_after))
-            .flatten(),
+        stale: row.observed_at.map(is_stale).unwrap_or(true),
+        stale_after: row.observed_at.map(stale_after),
     }
 }
 
@@ -151,7 +146,6 @@ async fn current_status_row(pool: &sqlx::PgPool, slug: &str) -> Result<CurrentSt
     let row = sqlx::query_as::<_, CurrentStatusRow>(
         r#"
         select
-          ml.shop_id is not null as is_managed,
           l.name,
           l.address,
           coalesce(s.is_open, l.is_open) as is_open,
@@ -167,7 +161,6 @@ async fn current_status_row(pool: &sqlx::PgPool, slug: &str) -> Result<CurrentSt
           s.notices_observed_at,
           s.closing_notices_observed_at
         from locations l
-        left join managed_locations ml on ml.shop_id = l.shop_id and ml.is_active is true
         left join location_current_status s on s.shop_id = l.shop_id
         where l.slug = $1
         limit 1
@@ -178,9 +171,6 @@ async fn current_status_row(pool: &sqlx::PgPool, slug: &str) -> Result<CurrentSt
     .await?;
 
     match row {
-        Some(row) if !row.is_managed => Err(ApiError::not_ready(
-            "live status is only available for managed locations",
-        )),
         Some(row) if row.observed_at.is_some() => Ok(row),
         Some(_) => Err(ApiError::not_ready("wait time has not been observed yet")),
         None => {
@@ -271,23 +261,15 @@ pub async fn schema_ready(pool: &sqlx::PgPool) -> bool {
     .unwrap_or(false)
 }
 
-#[derive(Debug, FromRow)]
-struct HistoryPointRow {
-    start: DateTime<Utc>,
-    avg_pickup_wait_minutes: Option<f64>,
-    min_pickup_wait_minutes: Option<i32>,
-    max_pickup_wait_minutes: Option<i32>,
-    avg_delivery_estimate_minutes: Option<f64>,
-    avg_making_cups: Option<f64>,
-    avg_making_orders: Option<f64>,
-    sample_count: i64,
-}
+const MAX_INTERPOLATION_GAP_SECONDS: i64 = 20 * 60;
 
-#[derive(Debug, FromRow)]
-struct HistoryComparisonPointRow {
-    minute_of_day: i32,
-    avg_pickup_wait_minutes: Option<f64>,
-    sample_count: i64,
+#[derive(Debug, Clone, FromRow)]
+struct WaitSample {
+    observed_at: DateTime<Utc>,
+    pickup_wait_minutes: Option<f64>,
+    delivery_estimate_minutes: Option<f64>,
+    making_cups: Option<f64>,
+    making_orders: Option<f64>,
 }
 
 pub async fn history_for_slug(
@@ -296,116 +278,18 @@ pub async fn history_for_slug(
     range: HistoryRange,
 ) -> Result<HistoryResponse, ApiError> {
     let location = location_row(pool, slug).await?;
-    if !location.is_managed {
-        return Err(ApiError::not_ready(
-            "history is only available for managed locations",
-        ));
-    }
-
-    let sql = match range {
-        HistoryRange::Today => r#"
-            with location as (
-              select l.shop_id, l.timezone
-              from locations l
-              where l.slug = $1
-            ), day_start as (
-              select date_trunc('day', now() at time zone location.timezone) at time zone location.timezone as start_at
-              from location
-            )
-            select
-              time_bucket('1 minute'::interval, w.observed_at) as start,
-              avg(w.pickup_wait_minutes)::float8 as avg_pickup_wait_minutes,
-              min(w.pickup_wait_minutes) as min_pickup_wait_minutes,
-              max(w.pickup_wait_minutes) as max_pickup_wait_minutes,
-              avg(w.delivery_estimate_minutes)::float8 as avg_delivery_estimate_minutes,
-              avg(w.making_cups)::float8 as avg_making_cups,
-              avg(w.making_orders)::float8 as avg_making_orders,
-              count(*)::int8 as sample_count
-            from location_wait_time_observations w, day_start, location
-            where w.shop_id = location.shop_id
-              and w.observed_at >= day_start.start_at
-            group by 1
-            order by 1 asc
-            "#
-        .to_string(),
-        HistoryRange::SevenDays => r#"
-            with location as (
-              select shop_id from locations where slug = $1
-            )
-            select
-              w.bucket as start,
-              w.avg_pickup_wait_minutes,
-              w.min_pickup_wait_minutes,
-              w.max_pickup_wait_minutes,
-              w.avg_delivery_estimate_minutes,
-              w.avg_making_cups,
-              w.avg_making_orders,
-              w.sample_count
-            from location_wait_time_1m w, location
-            where w.shop_id = location.shop_id
-              and w.bucket >= now() - '7 days'::interval
-            order by 1 asc
-            "#
-        .to_string(),
-        _ => format!(
-            r#"
-            with location as (
-              select shop_id from locations where slug = $1
-            )
-            select
-              time_bucket('1 minute'::interval, w.observed_at) as start,
-              avg(w.pickup_wait_minutes)::float8 as avg_pickup_wait_minutes,
-              min(w.pickup_wait_minutes) as min_pickup_wait_minutes,
-              max(w.pickup_wait_minutes) as max_pickup_wait_minutes,
-              avg(w.delivery_estimate_minutes)::float8 as avg_delivery_estimate_minutes,
-              avg(w.making_cups)::float8 as avg_making_cups,
-              avg(w.making_orders)::float8 as avg_making_orders,
-              count(*)::int8 as sample_count
-            from location_wait_time_observations w, location
-            where w.shop_id = location.shop_id
-              and w.observed_at >= now() - '{}'::interval
-            group by 1
-            order by 1 asc
-            "#,
-            range.sql_interval()
-        ),
+    let timezone = location.timezone.parse::<Tz>().unwrap_or(Los_Angeles);
+    let now = Utc::now();
+    let start = history_start(now, range, timezone);
+    let sample_start = start - TimeDelta::seconds(MAX_INTERPOLATION_GAP_SECONDS);
+    let samples = if matches!(range, HistoryRange::SevenDays) {
+        aggregate_wait_samples(pool, slug, sample_start, now).await?
+    } else {
+        raw_wait_samples(pool, slug, sample_start, now).await?
     };
-
-    let rows = sqlx::query_as::<_, HistoryPointRow>(&sql)
-        .bind(slug)
-        .fetch_all(pool)
-        .await?;
-    let comparison_rows = if matches!(range, HistoryRange::Today) {
-        sqlx::query_as::<_, HistoryComparisonPointRow>(
-            r#"
-            with location as (
-              select l.shop_id, l.timezone
-              from locations l
-              where l.slug = $1
-            ), bounds as (
-              select
-                date_trunc('day', now() at time zone location.timezone) at time zone location.timezone as today_start,
-                (date_trunc('day', now() at time zone location.timezone) - '7 days'::interval) at time zone location.timezone as comparison_start
-              from location
-            )
-            select
-              (
-                extract(hour from w.bucket at time zone location.timezone)::int * 60 +
-                extract(minute from w.bucket at time zone location.timezone)::int
-              )::int as minute_of_day,
-              avg(w.avg_pickup_wait_minutes)::float8 as avg_pickup_wait_minutes,
-              sum(w.sample_count)::int8 as sample_count
-            from location_wait_time_1m w, location, bounds
-            where w.shop_id = location.shop_id
-              and w.bucket >= bounds.comparison_start
-              and w.bucket < bounds.today_start
-            group by 1
-            order by 1 asc
-            "#,
-        )
-        .bind(slug)
-        .fetch_all(pool)
-        .await?
+    let points = interpolated_history_points(&samples, floor_minute(start), floor_minute(now));
+    let comparison_points = if matches!(range, HistoryRange::Today) {
+        interpolated_comparison_points(pool, slug, timezone, floor_minute(start)).await?
     } else {
         Vec::new()
     };
@@ -413,27 +297,242 @@ pub async fn history_for_slug(
     Ok(HistoryResponse {
         range: range.to_string(),
         generated_at: Utc::now(),
-        points: rows
-            .into_iter()
-            .map(|row| HistoryPoint {
-                start: row.start,
-                end: row.start + TimeDelta::minutes(1),
-                avg_pickup_wait_minutes: row.avg_pickup_wait_minutes,
-                min_pickup_wait_minutes: row.min_pickup_wait_minutes,
-                max_pickup_wait_minutes: row.max_pickup_wait_minutes,
-                avg_delivery_estimate_minutes: row.avg_delivery_estimate_minutes,
-                avg_making_cups: row.avg_making_cups,
-                avg_making_orders: row.avg_making_orders,
-                sample_count: row.sample_count,
-            })
-            .collect(),
-        comparison_points: comparison_rows
-            .into_iter()
-            .map(|row| HistoryComparisonPoint {
-                minute_of_day: row.minute_of_day,
-                avg_pickup_wait_minutes: row.avg_pickup_wait_minutes,
-                sample_count: row.sample_count,
-            })
-            .collect(),
+        points,
+        comparison_points,
     })
+}
+
+async fn raw_wait_samples(
+    pool: &sqlx::PgPool,
+    slug: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<Vec<WaitSample>, ApiError> {
+    Ok(sqlx::query_as::<_, WaitSample>(
+        r#"
+        with location as (
+          select shop_id from locations where slug = $1
+        )
+        select
+          w.observed_at,
+          w.pickup_wait_minutes::float8 as pickup_wait_minutes,
+          w.delivery_estimate_minutes::float8 as delivery_estimate_minutes,
+          w.making_cups::float8 as making_cups,
+          w.making_orders::float8 as making_orders
+        from location_wait_time_observations w, location
+        where w.shop_id = location.shop_id
+          and w.observed_at >= $2
+          and w.observed_at <= $3
+        order by w.observed_at asc
+        "#,
+    )
+    .bind(slug)
+    .bind(start)
+    .bind(end)
+    .fetch_all(pool)
+    .await?)
+}
+
+async fn aggregate_wait_samples(
+    pool: &sqlx::PgPool,
+    slug: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<Vec<WaitSample>, ApiError> {
+    Ok(sqlx::query_as::<_, WaitSample>(
+        r#"
+        with location as (
+          select shop_id from locations where slug = $1
+        )
+        select
+          w.bucket as observed_at,
+          w.avg_pickup_wait_minutes as pickup_wait_minutes,
+          w.avg_delivery_estimate_minutes as delivery_estimate_minutes,
+          w.avg_making_cups as making_cups,
+          w.avg_making_orders as making_orders
+        from location_wait_time_1m w, location
+        where w.shop_id = location.shop_id
+          and w.bucket >= $2
+          and w.bucket <= $3
+        order by w.bucket asc
+        "#,
+    )
+    .bind(slug)
+    .bind(start)
+    .bind(end)
+    .fetch_all(pool)
+    .await?)
+}
+
+async fn interpolated_comparison_points(
+    pool: &sqlx::PgPool,
+    slug: &str,
+    timezone: Tz,
+    today_start: DateTime<Utc>,
+) -> Result<Vec<HistoryComparisonPoint>, ApiError> {
+    let comparison_start = today_start - TimeDelta::days(7);
+    let samples = aggregate_wait_samples(
+        pool,
+        slug,
+        comparison_start - TimeDelta::seconds(MAX_INTERPOLATION_GAP_SECONDS),
+        today_start,
+    )
+    .await?;
+    let today = today_start.with_timezone(&timezone).date_naive();
+    let mut by_day = BTreeMap::new();
+    for sample in samples {
+        let day = sample.observed_at.with_timezone(&timezone).date_naive();
+        if day < today {
+            by_day.entry(day).or_insert_with(Vec::new).push(sample);
+        }
+    }
+
+    let mut buckets = vec![Vec::<f64>::new(); 1440];
+    for (day, mut samples) in by_day {
+        samples.sort_by_key(|sample| sample.observed_at);
+        let day_start = local_midnight_utc(timezone, day);
+        let values = interpolated_pickup_values(&samples, day_start, 1440);
+        for (minute, value) in values.into_iter().enumerate() {
+            if let Some(value) = value {
+                buckets[minute].push(value);
+            }
+        }
+    }
+
+    Ok(buckets
+        .into_iter()
+        .enumerate()
+        .filter_map(|(minute, values)| {
+            (!values.is_empty()).then(|| HistoryComparisonPoint {
+                minute_of_day: minute as i32,
+                avg_pickup_wait_minutes: Some(values.iter().sum::<f64>() / values.len() as f64),
+                sample_count: values.len() as i64,
+            })
+        })
+        .collect())
+}
+
+fn interpolated_history_points(
+    samples: &[WaitSample],
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Vec<HistoryPoint> {
+    let mut points = Vec::new();
+    let mut cursor = start;
+    let mut index = 0usize;
+    while cursor <= end {
+        while index < samples.len() && samples[index].observed_at < cursor {
+            index += 1;
+        }
+        let before = index.checked_sub(1).and_then(|index| samples.get(index));
+        let after = samples.get(index);
+        let pickup = interpolate_value(before, after, cursor, |sample| sample.pickup_wait_minutes);
+        let rounded_pickup = pickup.map(|value| value.round() as i32);
+        points.push(HistoryPoint {
+            start: cursor,
+            end: cursor + TimeDelta::minutes(1),
+            avg_pickup_wait_minutes: pickup,
+            min_pickup_wait_minutes: rounded_pickup,
+            max_pickup_wait_minutes: rounded_pickup,
+            avg_delivery_estimate_minutes: interpolate_value(before, after, cursor, |sample| {
+                sample.delivery_estimate_minutes
+            }),
+            avg_making_cups: interpolate_value(before, after, cursor, |sample| sample.making_cups),
+            avg_making_orders: interpolate_value(before, after, cursor, |sample| {
+                sample.making_orders
+            }),
+            sample_count: pickup.is_some() as i64,
+        });
+        cursor += TimeDelta::minutes(1);
+    }
+    points
+}
+
+fn interpolated_pickup_values(
+    samples: &[WaitSample],
+    start: DateTime<Utc>,
+    minutes: usize,
+) -> Vec<Option<f64>> {
+    let mut values = Vec::with_capacity(minutes);
+    let mut index = 0usize;
+    for minute in 0..minutes {
+        let target = start + TimeDelta::minutes(minute as i64);
+        while index < samples.len() && samples[index].observed_at < target {
+            index += 1;
+        }
+        let before = index.checked_sub(1).and_then(|index| samples.get(index));
+        let after = samples.get(index);
+        values.push(interpolate_value(before, after, target, |sample| {
+            sample.pickup_wait_minutes
+        }));
+    }
+    values
+}
+
+fn interpolate_value(
+    before: Option<&WaitSample>,
+    after: Option<&WaitSample>,
+    target: DateTime<Utc>,
+    value: impl Fn(&WaitSample) -> Option<f64>,
+) -> Option<f64> {
+    let before_value = before.and_then(&value);
+    let after_value = after.and_then(&value);
+    match (before_value, after_value, before, after) {
+        (Some(before_value), Some(after_value), Some(before), Some(after)) => {
+            let gap = after
+                .observed_at
+                .signed_duration_since(before.observed_at)
+                .num_seconds();
+            if gap < 0 || gap > MAX_INTERPOLATION_GAP_SECONDS {
+                return None;
+            }
+            if gap == 0 {
+                return Some(before_value);
+            }
+            let offset = target
+                .signed_duration_since(before.observed_at)
+                .num_seconds()
+                .clamp(0, gap) as f64;
+            Some(before_value + (after_value - before_value) * offset / gap as f64)
+        }
+        (Some(before_value), None, Some(before), _) => (target
+            .signed_duration_since(before.observed_at)
+            .num_seconds()
+            <= MAX_INTERPOLATION_GAP_SECONDS)
+            .then_some(before_value),
+        (None, Some(after_value), _, Some(after)) => (after
+            .observed_at
+            .signed_duration_since(target)
+            .num_seconds()
+            <= MAX_INTERPOLATION_GAP_SECONDS)
+            .then_some(after_value),
+        _ => None,
+    }
+}
+
+fn history_start(now: DateTime<Utc>, range: HistoryRange, timezone: Tz) -> DateTime<Utc> {
+    match range {
+        HistoryRange::Today => {
+            let today = now.with_timezone(&timezone).date_naive();
+            local_midnight_utc(timezone, today)
+        }
+        HistoryRange::OneHour => now - TimeDelta::hours(1),
+        HistoryRange::SixHours => now - TimeDelta::hours(6),
+        HistoryRange::OneDay => now - TimeDelta::hours(24),
+        HistoryRange::SevenDays => now - TimeDelta::days(7),
+    }
+}
+
+fn local_midnight_utc(timezone: Tz, date: chrono::NaiveDate) -> DateTime<Utc> {
+    timezone
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0)
+        .earliest()
+        .map(|value| value.with_timezone(&Utc))
+        .unwrap_or_else(Utc::now)
+}
+
+fn floor_minute(value: DateTime<Utc>) -> DateTime<Utc> {
+    value
+        - TimeDelta::seconds(value.timestamp().rem_euclid(60))
+        - TimeDelta::nanoseconds(i64::from(value.timestamp_subsec_nanos() % 1_000_000_000))
 }

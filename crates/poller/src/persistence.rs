@@ -35,6 +35,27 @@ pub async fn managed_shops(pool: &sqlx::PgPool) -> anyhow::Result<Vec<ShopRef>> 
         .collect())
 }
 
+pub async fn tracked_shops(pool: &sqlx::PgPool) -> anyhow::Result<Vec<ShopRef>> {
+    let rows = sqlx::query_as::<_, (i64, String, Option<String>)>(
+        r#"
+        select l.shop_id, l.country_code, l.city_code
+        from locations l
+        where coalesce(l.is_enabled, true) is true
+        order by l.shop_id
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(shop_id, country_code, city_code)| ShopRef {
+            shop_id,
+            country_code,
+            city_code,
+        })
+        .collect())
+}
+
 pub async fn active_cooldowns(
     pool: &sqlx::PgPool,
     endpoint: &str,

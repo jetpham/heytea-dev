@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>about heytea.dev</title>
+  <meta name="description" content="About heytea.dev.">
+  <meta name="theme-color" content="#ffffff">
+  <link rel="canonical" href="https://heytea.dev/about">
+  <link rel="icon" href="{{ favicon_href }}" type="image/svg+xml">
+  <link rel="alternate" type="text/plain" title="llms.txt" href="/llms.txt">
+  <style>{{ inline_css|safe }}</style>
+</head>
+<body>
+  <nav aria-label="main">
+    <a class="brand" href="https://heytea.dev/">heytea.dev</a>
+    <span class="links">
+      <a href="https://heytea.dev/about">about</a>
+      <a href="https://docs.heytea.dev/">docs</a>
+      <a href="https://status.heytea.dev/">status</a>
+      <a href="https://crates.io/crates/heytea">crate</a>
+      <a href="https://mcp.heytea.dev/mcp">mcp</a>
+    </span>
+  </nav>
+  <main>
+    <h1>about heytea.dev</h1>
+    <p>Write the about page here.</p>
+  </main>
+  <footer>
+    <span>made by <a href="https://jetpham.com">jet</a></span>
+    {% if evil %}<span class="evil">i know you're evil</span>{% else %}<span class="evil" aria-hidden="true"></span>{% endif %}
+    <a class="source" href="https://github.com/jetpham/heytea-dev">source code</a>
+  </footer>
+</body>
+</html>

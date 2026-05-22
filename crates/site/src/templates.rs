@@ -83,8 +83,9 @@ impl DashboardView {
             .map(|status| status.observed_at.timestamp() / 60)
             .unwrap_or_default();
         let managed = location.is_managed;
-        let closed = managed && status.and_then(|status| status.is_open) == Some(false);
-        let open = managed && status.and_then(|status| status.is_open) == Some(true);
+        let observed_open = status.and_then(|status| status.is_open);
+        let closed = observed_open.or(location.is_open) == Some(false);
+        let open = observed_open == Some(true);
         let graph_hidden = !open || today_values.is_empty();
         let wait_minutes = status
             .and_then(|status| status.pickup_wait_minutes)
@@ -93,12 +94,10 @@ impl DashboardView {
             .map(|status| status.observed_at.to_rfc3339())
             .unwrap_or_default();
         let location_name = location.name.to_ascii_lowercase();
-        let status_line = if !managed {
-            format!("managed tracking is not enabled for heytea {location_name} yet.")
-        } else if closed {
+        let status_line = if closed {
             "closed".to_string()
         } else if !open {
-            format!("waiting for the first managed wait observation at heytea {location_name}.")
+            format!("waiting for the first tracked wait observation at heytea {location_name}.")
         } else {
             let status = status.expect("open status exists");
             format!(
@@ -132,10 +131,8 @@ pub struct DashboardTemplate {
     pub stream_url: String,
     pub canonical_url: String,
     pub location_name: String,
-    pub address: String,
     pub timezone: String,
     pub managed: bool,
-    pub request_tracking_href: String,
     pub favicon_href: String,
     pub inline_css: String,
     pub inline_js: &'static str,
@@ -162,16 +159,13 @@ impl DashboardTemplate {
     ) -> Self {
         let view = DashboardView::new(status.as_ref(), history.as_ref(), &location);
         let canonical_url = format!("https://heytea.dev/{}", location.slug);
-        let request_tracking_href = request_tracking_href(&location, &canonical_url);
 
         Self {
             stream_url,
             canonical_url,
             location_name: location.name.to_ascii_lowercase(),
-            address: location.address,
             timezone: location.timezone,
             managed: view.managed,
-            request_tracking_href,
             favicon_href: svg_data_uri(&favicon_svg()),
             inline_css: dashboard_css(),
             inline_js: DASHBOARD_JS,
@@ -188,6 +182,14 @@ impl DashboardTemplate {
             trend_minute: view.trend_minute,
         }
     }
+}
+
+#[derive(Template)]
+#[template(path = "about.html")]
+pub struct AboutTemplate {
+    pub favicon_href: String,
+    pub inline_css: String,
+    pub evil: bool,
 }
 
 #[derive(Template)]
@@ -209,7 +211,6 @@ pub struct FinderLocationRow {
     pub name: String,
     pub search_text: String,
     pub status_text: String,
-    pub tracking_text: String,
     pub latitude: String,
     pub longitude: String,
     pub distance: String,
@@ -272,11 +273,6 @@ impl FinderLocationRow {
         let search_text = format!("{} {} {}", location.name, location.slug, location.address)
             .to_ascii_lowercase();
         let status_text = finder_status(&location);
-        let tracking_text = if location.is_managed {
-            "tracked".to_string()
-        } else {
-            "request tracking".to_string()
-        };
         let open_sort = open_sort(&location);
         let wait_sort = wait_sort(&location);
 
@@ -285,7 +281,6 @@ impl FinderLocationRow {
             name: name_sort.clone(),
             search_text,
             status_text,
-            tracking_text,
             latitude: coordinates
                 .map(|coordinates| coordinates.latitude.to_string())
                 .unwrap_or_default(),
@@ -322,43 +317,25 @@ fn distance_sort(location: &LocationResponse, here: Coordinates) -> f64 {
 }
 
 fn default_location_order(a: &LocationResponse, b: &LocationResponse) -> Ordering {
-    managed_sort(a)
-        .cmp(&managed_sort(b))
-        .then_with(|| open_sort(a).cmp(&open_sort(b)))
+    open_sort(a)
+        .cmp(&open_sort(b))
         .then_with(|| wait_sort(a).cmp(&wait_sort(b)))
         .then_with(|| a.name.cmp(&b.name))
 }
 
-fn managed_sort(location: &LocationResponse) -> u8 {
-    if location.is_managed {
-        0
-    } else {
-        1
-    }
-}
-
 fn open_sort(location: &LocationResponse) -> u8 {
-    if location.is_managed && location.is_open == Some(true) {
+    if location.is_open == Some(true) {
         0
-    } else if location.is_open == Some(true) {
-        1
     } else {
-        2
+        1
     }
 }
 
 fn wait_sort(location: &LocationResponse) -> i32 {
-    if location.is_managed {
-        location.pickup_wait_minutes.unwrap_or(i32::MAX)
-    } else {
-        i32::MAX
-    }
+    location.pickup_wait_minutes.unwrap_or(i32::MAX)
 }
 
 fn finder_status(location: &LocationResponse) -> String {
-    if !location.is_managed {
-        return "not tracked yet".to_string();
-    }
     match location.is_open {
         Some(true) => location
             .pickup_wait_minutes
@@ -469,34 +446,7 @@ fn series_data(values: &[(i32, i32)]) -> String {
         .join(",")
 }
 
-fn request_tracking_href(location: &LocationResponse, canonical_url: &str) -> String {
-    let subject = format!("Managed HeyTea tracking request: {}", location.name);
-    let body = format!(
-        "Hi Jet,\n\nPlease add managed tracking for:\nStore: {}\nSlug: {}\nAddress: {}\nPage: {}\n\nWhy I want tracking:\n\n\nFavorite HeyTea item:\n",
-        location.name, location.slug, location.address, canonical_url
-    );
-    format!(
-        "mailto:jet@extremist.software?subject={}&body={}",
-        percent_encode(&subject),
-        percent_encode(&body)
-    )
-}
-
-fn percent_encode(value: &str) -> String {
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            b' ' => encoded.push_str("%20"),
-            _ => write!(&mut encoded, "%{byte:02X}").expect("write to string"),
-        }
-    }
-    encoded
-}
-
-fn dashboard_css() -> String {
+pub(crate) fn dashboard_css() -> String {
     format!(
         "@font-face{{font-family:a;src:url(data:font/woff2;base64,{}) format('woff2');font-display:block}}{}",
         DASHBOARD_FONT_B64.trim(),
@@ -504,7 +454,7 @@ fn dashboard_css() -> String {
     )
 }
 
-fn svg_data_uri(svg: &str) -> String {
+pub(crate) fn svg_data_uri(svg: &str) -> String {
     let mut uri = String::from("data:image/svg+xml,");
     for byte in svg.trim().bytes() {
         match byte {
@@ -642,6 +592,49 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_waits_for_first_tracked_observation() {
+        let mut location = test_location("beverly-hills", "Beverly Hills", 34.069, -118.4, 0);
+        location.pickup_wait_minutes = None;
+        location.observed_at = None;
+        location.stale = true;
+        location.stale_after = None;
+
+        let template = DashboardTemplate::new(
+            None,
+            None,
+            "https://api.heytea.dev/locations/beverly-hills/stream".to_string(),
+            location,
+            false,
+        );
+        let html = template.render().expect("render dashboard");
+
+        assert!(html
+            .contains("waiting for the first tracked wait observation at heytea beverly hills."));
+        assert!(html
+            .contains("data-stream-url=\"https://api.heytea.dev/locations/beverly-hills/stream\""));
+        assert!(html.contains("<svg id=\"graph\""));
+        assert!(!html.contains("request managed tracking"));
+        assert!(!html.contains("live waits load only while this page is open"));
+        assert!(!html.contains("id=\"tracking-request\""));
+        assert!(!html.contains("jet@extremist.software"));
+        assert!(!html.contains("mailto:jet"));
+    }
+
+    #[test]
+    fn about_template_renders_editable_placeholder() {
+        let template = AboutTemplate {
+            favicon_href: svg_data_uri(&favicon_svg()),
+            inline_css: dashboard_css(),
+            evil: false,
+        };
+        let html = template.render().expect("render about");
+
+        assert!(html.contains("about heytea.dev"));
+        assert!(html.contains("Write the about page here."));
+        assert!(html.contains("https://heytea.dev/about"));
+    }
+
+    #[test]
     fn evil_footer_is_conditional() {
         let evil = FinderTemplate::new(None, None, None, true)
             .render()
@@ -657,10 +650,16 @@ mod tests {
     #[test]
     fn finder_renders_server_ordered_rows() {
         let now = Utc::now();
+        let mut far = test_location("far", "Far Store", 34.0522, -118.2437, 4);
+        far.is_managed = false;
+        far.pickup_wait_minutes = None;
+        far.observed_at = None;
+        far.stale = true;
+        far.stale_after = None;
         let locations = LocationsResponse {
             generated_at: now,
             locations: vec![
-                test_location("far", "Far Store", 34.0522, -118.2437, 4),
+                far,
                 test_location("near", "Near Store", 37.784, -122.403, 8),
             ],
         };
@@ -683,6 +682,9 @@ mod tests {
         assert!(html.contains("server location guess: San Francisco"));
         assert!(html.contains("search checks store name, URL slug, and address."));
         assert!(html.contains("data-distance=\"0.000000\""));
+        assert!(html.contains("wait unknown"));
+        assert!(!html.contains("tracked"));
+        assert!(!html.contains("request tracking"));
         assert!(html.contains("IP location data by"));
         assert!(!html.contains("locations-data"));
     }

@@ -340,7 +340,7 @@ SQL
                 exec ${deploy-rs.packages.${system}.deploy-rs}/bin/deploy \
                   --auto-rollback true \
                   --magic-rollback true \
-                  path:.# \
+                  path:.#heytea-dev \
                   "$@"
               fi
 
@@ -394,15 +394,50 @@ SQL
         ];
       };
 
+      nixosConfigurations.heytea-dev-bootstrap = nixpkgs.lib.nixosSystem {
+        system = serverSystem;
+        modules = [
+          agenix.nixosModules.default
+          self.nixosModules.heytea
+          ./nix/hosts/heytea.nix
+          ({ lib, ... }: {
+            services.openssh.ports = lib.mkForce [ 22 ];
+            systemd.services.heytea-ssh-tui.wantedBy = lib.mkForce [ ];
+            systemd.services.tailscale-autoconnect.wantedBy = lib.mkForce [ ];
+          })
+          ({ ... }: {
+            services.heytea = {
+              apiPackage = self.packages.${serverSystem}.heytea-api;
+              pollerPackage = self.packages.${serverSystem}.heytea-poller;
+              mcpPackage = self.packages.${serverSystem}.heytea-mcp;
+              sshTuiPackage = self.packages.${serverSystem}.heytea-ssh-tui;
+              sitePackage = self.packages.${serverSystem}.heytea-site;
+              migrationsPackage = self.packages.${serverSystem}.heytea-migrations;
+              geoIpDatabase = "${self.packages.${serverSystem}.dbip-city-lite-mmdb}/share/heytea/dbip-city-lite.mmdb";
+            };
+          })
+        ];
+      };
+
       nixosConfigurations.heytea = self.nixosConfigurations.heytea-dev;
 
       deploy.nodes."heytea-dev" = {
-        hostname = "heytea-dev-1";
+        hostname = "heytea-dev-2";
         sshUser = "root";
         sshOpts = [ "-p" "2222" ];
         profiles.system = {
           user = "root";
           path = deploy-rs.lib.x86_64-linux.activate.nixos self.nixosConfigurations.heytea-dev;
+        };
+      };
+
+      deploy.nodes."heytea-dev-bootstrap" = {
+        hostname = "heytea-dev-bootstrap";
+        sshUser = "root";
+        sshOpts = [ "-p" "22" ];
+        profiles.system = {
+          user = "root";
+          path = deploy-rs.lib.x86_64-linux.activate.nixos self.nixosConfigurations.heytea-dev-bootstrap;
         };
       };
     };

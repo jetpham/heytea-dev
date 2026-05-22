@@ -4,7 +4,8 @@ let
   jetWork = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPyic30I+SaDw0Lz/EFpMNeHCwxpwPfkgfR6uz3g7io7";
 
   heyteaDev = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGJ8nD1QQMhlskZityqZBEmjVjanKvmWfWd6Yvpioldk root@heytea-dev-512";
-  recipients = [ jetPersonal jetWork heyteaDev ];
+  heyteaDevNew = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAJgYNiE3uT+cwWuK5ik0ddfPFVctipFxznFTbXHSSyy root@heytea-dev-512-new";
+  recipients = [ jetPersonal jetWork heyteaDev heyteaDevNew ];
 in
 {
   "tailscale-auth-key.age".publicKeys = recipients;

@@ -4,7 +4,7 @@ const statusEl = $("status");
 const graph = $("graph");
 const trend = $("trend");
 const comparison = $("comparison");
-const managed = app?.dataset.managed === "true";
+const streamUrl = app?.dataset.streamUrl || "";
 const zone = app?.dataset.timezone || "America/Los_Angeles";
 const locationName = (app?.dataset.locationName || "downtown metreon").toLowerCase();
 const timeFmt = new Intl.DateTimeFormat("en-US", {
@@ -21,12 +21,25 @@ const minuteFmt = new Intl.DateTimeFormat("en-US", {
   hour12: false,
 });
 
-let open = app?.dataset.open === "true";
-let wait = Number(app?.dataset.wait || 0);
+let open = parseOpen(app?.dataset.open || "");
+let wait = parseOptionalNumber(app?.dataset.wait || "");
 let observedAt = app?.dataset.observedAt || "";
 let points = parseSeries(trend?.dataset.v || "");
 const comparisonPoints = parseSeries(comparison?.dataset.v || "");
 let day = localDay(observedAt || Date.now());
+let source = null;
+let pollTimer = 0;
+
+function parseOpen(raw) {
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return null;
+}
+
+function parseOptionalNumber(raw) {
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
 
 function parseSeries(raw) {
   return raw
@@ -40,7 +53,8 @@ function parseSeries(raw) {
 }
 
 function minutes(value) {
-  return `${value} ${value === 1 ? "minute" : "minutes"}`;
+  const rounded = Math.round(value);
+  return `${rounded} ${rounded === 1 ? "minute" : "minutes"}`;
 }
 
 function secondsAgo(value) {
@@ -52,15 +66,18 @@ function time(value) {
   const parts = Object.fromEntries(
     timeFmt.formatToParts(new Date(value)).map((part) => [part.type, part.value]),
   );
-  return `${parts.hour}:${parts.minute}:${parts.second}${parts.dayPeriod.toLowerCase()}`;
+  return `${parts.hour}:${parts.minute}:${parts.second}${(parts.dayPeriod || "").toLowerCase()}`;
 }
 
 function sentence() {
-  if (!managed) return statusEl?.textContent || "managed tracking is not enabled yet.";
-  if (open && observedAt) {
-    return `the wait time at heytea ${locationName} is ${minutes(wait)} as of ${time(observedAt)}, which was ${secondsAgo(observedAt)}`;
+  if (observedAt) {
+    if (open === false) return "closed";
+    if (wait != null) {
+      return `the wait time at heytea ${locationName} is ${minutes(wait)} as of ${time(observedAt)}, which was ${secondsAgo(observedAt)}`;
+    }
+    return `live wait time at heytea ${locationName} is unavailable as of ${time(observedAt)}, which was ${secondsAgo(observedAt)}`;
   }
-  return open ? `waiting for the first managed wait observation at heytea ${locationName}.` : "closed";
+  return `waiting for the first tracked wait observation at heytea ${locationName}.`;
 }
 
 function renderSentence() {
@@ -109,13 +126,12 @@ function draw() {
 }
 
 function update(payload) {
-  if (!managed) return;
-  open = payload.isOpen === true;
-  wait = payload.pickupWaitMinutes ?? 0;
+  open = parseOpen(String(payload.isOpen));
+  wait = payload.pickupWaitMinutes == null ? null : parseOptionalNumber(payload.pickupWaitMinutes);
   observedAt = payload.observedAt || observedAt;
   renderSentence();
-  if (graph) graph.hidden = !open || points.length === 0;
-  if (!open || payload.pickupWaitMinutes == null || !payload.observedAt) return;
+  if (graph) graph.hidden = open !== true || points.length === 0;
+  if (open !== true || wait == null || !payload.observedAt) return;
 
   const nextDay = localDay(payload.observedAt);
   if (nextDay !== day) {
@@ -125,9 +141,9 @@ function update(payload) {
   const minute = minuteOfDay(payload.observedAt);
   const existing = points.find((point) => point.minute === minute);
   if (existing) {
-    existing.value = payload.pickupWaitMinutes;
+    existing.value = wait;
   } else {
-    points.push({ minute, value: payload.pickupWaitMinutes });
+    points.push({ minute, value: wait });
     points.sort((a, b) => a.minute - b.minute);
   }
   if (graph) graph.hidden = false;
@@ -135,16 +151,56 @@ function update(payload) {
 }
 
 function connect() {
-  const url = app?.dataset.streamUrl;
-  if (!managed || !url || !("EventSource" in window)) return;
-  const source = new EventSource(url);
+  if (source || !streamUrl) return;
+  if (!("EventSource" in window)) {
+    startPolling();
+    return;
+  }
+  source = new EventSource(streamUrl);
   source.addEventListener("status.updated", (event) => {
     try {
       update(JSON.parse(event.data));
     } catch (_) {
-      source.close();
+      disconnect();
     }
   });
+}
+
+function disconnect() {
+  if (!source) return;
+  source.close();
+  source = null;
+}
+
+function statusUrl() {
+  if (streamUrl.endsWith("/stream")) {
+    return `${streamUrl.slice(0, -"/stream".length)}/status`;
+  }
+  return "";
+}
+
+async function pollOnce() {
+  const url = statusUrl();
+  if (!url) return;
+  try {
+    const response = await fetch(url, { cache: "no-store" });
+    if (response.ok) {
+      update(await response.json());
+    } else {
+      renderSentence();
+    }
+  } catch (_) {
+    renderSentence();
+  }
+  startPolling(60000);
+}
+
+function startPolling(delay = 0) {
+  if (pollTimer) return;
+  pollTimer = setTimeout(() => {
+    pollTimer = 0;
+    pollOnce();
+  }, delay);
 }
 
 addEventListener("load", () => {
