@@ -31,7 +31,7 @@
             pkgs.rustPlatform.buildRustPackage ({
               inherit pname version;
               src = ./.;
-              cargoLock.lockFile = ./Cargo.lock;
+              cargoHash = "sha256-+Xki8Cpe4SUVc8ZVjvxVo4rjcco5EmgDHoaC1JQ2IN4=";
               cargoBuildFlags = [ "-p" package ];
               cargoTestFlags = [ "-p" package ];
               nativeBuildInputs = [ pkgs.pkg-config ] ++ extraNativeBuildInputs;
@@ -336,18 +336,78 @@ SQL
           apps.deploy = {
             type = "app";
             program = "${pkgs.writeShellScript "deploy-heytea" ''
-              if [ "$#" -eq 0 ] || [ "''${1#-}" != "$1" ]; then
-                exec ${deploy-rs.packages.${system}.deploy-rs}/bin/deploy \
+              set -euo pipefail
+
+              deploy=${deploy-rs.packages.${system}.deploy-rs}/bin/deploy
+              ssh=${pkgs.openssh}/bin/ssh
+              host="''${HEYTEA_DEPLOY_HOST:-heytea-dev-2}"
+              user="''${HEYTEA_DEPLOY_USER:-root}"
+
+              if [ "$#" -gt 0 ] && [ "''${1#-}" = "$1" ]; then
+                exec "$deploy" \
                   --auto-rollback true \
                   --magic-rollback true \
-                  path:.#heytea-dev \
                   "$@"
               fi
 
-              exec ${deploy-rs.packages.${system}.deploy-rs}/bin/deploy \
+              probe() {
+                "$ssh" -p "$1" \
+                  -o BatchMode=yes \
+                  -o ConnectTimeout=8 \
+                  -o StrictHostKeyChecking=accept-new \
+                  "$user@$host" 'printf deploy-ready' 2>/dev/null || true
+              }
+
+              port="''${HEYTEA_DEPLOY_PORT:-}"
+              if [ -z "$port" ]; then
+                if [ "$(probe 2222)" = deploy-ready ]; then
+                  port=2222
+                elif [ "$(probe 22)" = deploy-ready ]; then
+                  port=22
+                else
+                  printf 'could not reach %s@%s on port 2222 or 22\n' "$user" "$host" >&2
+                  exit 1
+                fi
+              fi
+
+              magic_rollback=true
+              if [ "$port" = 22 ]; then
+                magic_rollback=false
+              fi
+
+              printf 'deploying path:.#heytea-dev to %s@%s via ssh port %s\n' "$user" "$host" "$port" >&2
+              "$deploy" \
                 --auto-rollback true \
-                --magic-rollback true \
-                "$@"
+                --magic-rollback "$magic_rollback" \
+                --ssh-opts "-p $port" \
+                "$@" \
+                path:.#heytea-dev
+
+              if [ "''${HEYTEA_DEPLOY_SKIP_VERIFY:-}" = 1 ]; then
+                exit 0
+              fi
+
+              printf 'verifying deployed site on %s\n' "$host" >&2
+              "$ssh" -p "$port" \
+                -o BatchMode=yes \
+                -o ConnectTimeout=8 \
+                -o StrictHostKeyChecking=accept-new \
+                "$user@$host" 'bash -s' <<'VERIFY'
+              set -euo pipefail
+              headers=$(mktemp)
+              root=$(mktemp)
+              store=$(mktemp)
+              trap 'rm -f "$headers" "$root" "$store"' EXIT
+
+              curl --compressed -fsS -H "Accept-Encoding: br" http://127.0.0.1:3100/ -D "$headers" -o "$root"
+              grep -qi "^content-encoding: br" "$headers"
+              grep -q "locations-data" "$root"
+              grep -q "data-stream-url=\"/locations/stream?offset=100\"" "$root"
+
+              curl --compressed -fsS -H "Accept-Encoding: br" http://127.0.0.1:3100/downtown-metreon -D "$headers" -o "$store"
+              grep -qi "^content-encoding: br" "$headers"
+              grep -q "heytea downtown metreon" "$store"
+              VERIFY
             ''}";
             meta.description = "Deploy heytea.dev with deploy-rs rollback protection";
           };

@@ -7,15 +7,17 @@ use chrono::{DateTime, Timelike, Utc};
 use chrono_tz::America::Los_Angeles;
 use chrono_tz::Tz;
 use heytea_core::{HistoryResponse, LocationResponse, LocationsResponse, StatusResponse};
+use serde::Serialize;
 use std::cmp::Ordering;
 use std::fmt::Write as _;
 
-const DASHBOARD_CSS: &str = include_str!("../templates/dashboard.css");
-const DASHBOARD_JS: &str = include_str!("../templates/dashboard.js");
-const FINDER_JS: &str = include_str!("../templates/finder.js");
+const DASHBOARD_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/dashboard.css.min"));
+const DASHBOARD_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/dashboard.js.min"));
+const FINDER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/finder.js.min"));
 const DASHBOARD_FONT_B64: &str =
     include_str!(concat!(env!("OUT_DIR"), "/dashboard-font.woff2.b64"));
 const FAVICON_SVG: &str = include_str!("../templates/heyteafavi.svg");
+pub(crate) const FINDER_INITIAL_LIMIT: usize = 100;
 
 #[derive(Debug, Clone)]
 pub(crate) struct DashboardView {
@@ -198,6 +200,8 @@ pub struct FinderTemplate {
     pub favicon_href: String,
     pub inline_css: String,
     pub inline_js: &'static str,
+    pub locations_stream_url: String,
+    pub locations_data: String,
     pub rows: Vec<FinderLocationRow>,
     pub location_status: String,
     pub show_geo_attribution: bool,
@@ -209,17 +213,33 @@ pub struct FinderTemplate {
 pub struct FinderLocationRow {
     pub slug: String,
     pub name: String,
-    pub search_text: String,
     pub status_text: String,
-    pub latitude: String,
-    pub longitude: String,
-    pub distance: String,
     pub distance_text: String,
     pub distance_hidden: bool,
-    pub open_sort: u8,
-    pub wait_sort: i32,
-    pub name_sort: String,
 }
+
+#[derive(Serialize)]
+struct FinderLocationsData(
+    Vec<Option<f64>>,
+    Vec<Option<f64>>,
+    Vec<String>,
+    Vec<u8>,
+    Vec<Option<i32>>,
+);
+
+#[derive(Serialize)]
+struct FinderStreamRow(
+    usize,
+    String,
+    String,
+    String,
+    Option<f64>,
+    Option<f64>,
+    u8,
+    Option<i32>,
+    String,
+    String,
+);
 
 impl FinderTemplate {
     pub fn new(
@@ -233,8 +253,16 @@ impl FinderTemplate {
             .unwrap_or_default();
         let here = inferred.map(|place| place.coordinates);
         sort_locations(&mut locations, here);
+        let visible_locations = locations.len().min(FINDER_INITIAL_LIMIT);
+        let locations_data = finder_locations_data(&locations[..visible_locations]);
+        let locations_stream_url = if locations.len() > visible_locations {
+            format!("/locations/stream?offset={visible_locations}")
+        } else {
+            String::new()
+        };
         let rows = locations
             .into_iter()
+            .take(visible_locations)
             .map(|location| FinderLocationRow::new(location, here))
             .collect();
         let location_status = match inferred {
@@ -251,8 +279,10 @@ impl FinderTemplate {
 
         Self {
             favicon_href: svg_data_uri(&favicon_svg()),
-            inline_css: dashboard_css(),
+            inline_css: finder_css(),
             inline_js: FINDER_JS,
+            locations_stream_url,
+            locations_data,
             rows,
             location_status,
             show_geo_attribution,
@@ -270,35 +300,100 @@ impl FinderLocationRow {
             .zip(coordinates)
             .map(|(here, location)| miles_between(here, location));
         let name_sort = location.name.to_ascii_lowercase();
-        let search_text = format!("{} {} {}", location.name, location.slug, location.address)
-            .to_ascii_lowercase();
         let status_text = finder_status(&location);
-        let open_sort = open_sort(&location);
-        let wait_sort = wait_sort(&location);
 
         Self {
             slug: location.slug,
             name: name_sort.clone(),
-            search_text,
             status_text,
-            latitude: coordinates
-                .map(|coordinates| coordinates.latitude.to_string())
-                .unwrap_or_default(),
-            longitude: coordinates
-                .map(|coordinates| coordinates.longitude.to_string())
-                .unwrap_or_default(),
-            distance: distance
-                .map(|distance| format!("{distance:.6}"))
-                .unwrap_or_default(),
             distance_text: distance
                 .map(|distance| format!("{distance:.1} mi"))
                 .unwrap_or_default(),
             distance_hidden: distance.is_none(),
-            open_sort,
-            wait_sort,
-            name_sort,
         }
     }
+}
+
+pub(crate) fn finder_locations_stream(
+    mut locations: Vec<LocationResponse>,
+    here: Option<Coordinates>,
+    offset: usize,
+) -> String {
+    sort_finder_locations(&mut locations, here);
+    locations
+        .into_iter()
+        .enumerate()
+        .skip(offset)
+        .filter_map(|(index, location)| finder_location_stream_line(index, location, here))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+pub(crate) fn sort_finder_locations(locations: &mut [LocationResponse], here: Option<Coordinates>) {
+    sort_locations(locations, here);
+}
+
+pub(crate) fn finder_location_stream_line(
+    index: usize,
+    location: LocationResponse,
+    here: Option<Coordinates>,
+) -> Option<String> {
+    let coordinates = location_coordinates(&location);
+    let open_sort = open_sort(&location);
+    let status_text = finder_status(&location);
+    let distance_text = here
+        .zip(coordinates)
+        .map(|(here, location)| format!("{:.1} mi", miles_between(here, location)))
+        .unwrap_or_default();
+    let row = FinderStreamRow(
+        index,
+        location.slug,
+        location.name.to_ascii_lowercase(),
+        location.address,
+        coordinates.map(|coordinates| round_coordinate(coordinates.latitude)),
+        coordinates.map(|coordinates| round_coordinate(coordinates.longitude)),
+        open_sort,
+        location.pickup_wait_minutes,
+        status_text,
+        distance_text,
+    );
+    serde_json::to_string(&row).ok().map(|mut line| {
+        line.push('\n');
+        line
+    })
+}
+
+fn finder_locations_data(locations: &[LocationResponse]) -> String {
+    let mut latitudes = Vec::with_capacity(locations.len());
+    let mut longitudes = Vec::with_capacity(locations.len());
+    let mut addresses = Vec::with_capacity(locations.len());
+    let mut open_sorts = Vec::with_capacity(locations.len());
+    let mut wait_sorts = Vec::with_capacity(locations.len());
+
+    for location in locations {
+        let coordinates = location_coordinates(location);
+        latitudes.push(coordinates.map(|coordinates| round_coordinate(coordinates.latitude)));
+        longitudes.push(coordinates.map(|coordinates| round_coordinate(coordinates.longitude)));
+        addresses.push(location.address.clone());
+        open_sorts.push(open_sort(location));
+        wait_sorts.push(location.pickup_wait_minutes);
+    }
+
+    script_json(&FinderLocationsData(
+        latitudes, longitudes, addresses, open_sorts, wait_sorts,
+    ))
+}
+
+fn round_coordinate(value: f64) -> f64 {
+    (value * 1_000_000.0).round() / 1_000_000.0
+}
+
+fn script_json<T: Serialize>(value: &T) -> String {
+    serde_json::to_string(value)
+        .unwrap_or_else(|_| "[]".to_string())
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
 }
 
 fn sort_locations(locations: &mut [LocationResponse], here: Option<Coordinates>) {
@@ -452,6 +547,10 @@ pub(crate) fn dashboard_css() -> String {
         DASHBOARD_FONT_B64.trim(),
         DASHBOARD_CSS
     )
+}
+
+fn finder_css() -> String {
+    DASHBOARD_CSS.replace("font-family:a;", "font-family:system-ui,sans-serif;")
 }
 
 pub(crate) fn svg_data_uri(svg: &str) -> String {
@@ -681,12 +780,59 @@ mod tests {
         let html = template.render().expect("render finder");
         assert!(html.contains("server location guess: San Francisco"));
         assert!(html.contains("search checks store name, URL slug, and address."));
-        assert!(html.contains("data-distance=\"0.000000\""));
+        assert!(html.contains("0.0 mi"));
         assert!(html.contains("wait unknown"));
         assert!(!html.contains("tracked"));
         assert!(!html.contains("request tracking"));
         assert!(html.contains("IP location data by"));
-        assert!(!html.contains("locations-data"));
+        assert!(html.contains("id=\"locations-data\""));
+        assert!(!html.contains("data-search="));
+        assert!(!html.contains("data-distance="));
+    }
+
+    #[test]
+    fn finder_initial_rows_are_limited_and_remaining_rows_stream() {
+        let locations = (0..=FINDER_INITIAL_LIMIT)
+            .map(|index| {
+                test_location(
+                    &format!("store-{index}"),
+                    &format!("Store {index}"),
+                    37.784 + index as f64 * 0.001,
+                    -122.403,
+                    index as i32,
+                )
+            })
+            .collect::<Vec<_>>();
+        let inferred = InferredPlace {
+            coordinates: Coordinates {
+                latitude: 37.784,
+                longitude: -122.403,
+            },
+            label: "San Francisco, California, United States".to_string(),
+        };
+
+        let template = FinderTemplate::new(
+            Some(LocationsResponse {
+                generated_at: Utc::now(),
+                locations: locations.clone(),
+            }),
+            Some(&inferred),
+            None,
+            false,
+        );
+
+        assert_eq!(template.rows.len(), FINDER_INITIAL_LIMIT);
+        assert_eq!(
+            template.locations_stream_url,
+            "/locations/stream?offset=100"
+        );
+        let html = template.render().expect("render finder");
+        assert!(html.contains("data-stream-url=\"/locations/stream?offset=100\""));
+        assert!(!html.contains("store-100"));
+
+        let stream = finder_locations_stream(locations, Some(inferred.coordinates), 100);
+        assert!(stream.contains("store-100"));
+        assert!(stream.lines().count() == 1);
     }
 
     fn test_location(

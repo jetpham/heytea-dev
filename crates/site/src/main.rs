@@ -7,7 +7,10 @@ mod templates;
 use crate::assets::Assets;
 use axum::Router;
 use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
-use tower_http::{compression::CompressionLayer, trace::TraceLayer};
+use tower_http::{
+    compression::{CompressionLayer, CompressionLevel},
+    trace::TraceLayer,
+};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Clone)]
@@ -54,7 +57,11 @@ async fn main() -> anyhow::Result<()> {
 
 pub fn app(state: AppState) -> Router {
     routes::router(state)
-        .layer(CompressionLayer::new())
+        .layer(
+            CompressionLayer::new()
+                .quality(CompressionLevel::Best)
+                .no_zstd(),
+        )
         .layer(TraceLayer::new_for_http())
 }
 

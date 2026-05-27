@@ -1,7 +1,8 @@
 use crate::{error::SiteError, templates, AppState};
 use askama::Template;
 use axum::{
-    extract::{ConnectInfo, Path, State},
+    body::{Body, Bytes},
+    extract::{ConnectInfo, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{any, get},
@@ -11,9 +12,9 @@ use chrono::Utc;
 use heytea_core::{
     HistoryResponse, LocationPath, LocationResponse, LocationsResponse, StatusResponse,
 };
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::json;
-use std::{net::SocketAddr, time::Instant};
+use std::{convert::Infallible, net::SocketAddr, time::Instant};
 use tower_http::services::{ServeDir, ServeFile};
 
 pub fn router(state: AppState) -> Router {
@@ -40,11 +41,17 @@ pub fn router(state: AppState) -> Router {
         .route("/.well-known/agent.json", get(agent_json))
         .route("/.well-known/mcp.json", get(mcp_json))
         .route("/.well-known/webmcp.json", get(webmcp_json))
+        .route("/locations/stream", get(finder_locations_stream))
         .nest_service("/assets", ServeDir::new(asset_root.join("assets")))
         .route_service("/a.woff2", ServeFile::new(asset_root.join("a.woff2")))
         .route("/:slug", get(location_dashboard))
         .fallback(not_found)
         .with_state(state)
+}
+
+#[derive(Debug, Deserialize)]
+struct FinderLocationsQuery {
+    offset: Option<usize>,
 }
 
 async fn finder(
@@ -93,6 +100,37 @@ async fn finder(
         evil_request(&headers),
     );
     Ok((finder_html_headers(), Html(template.render()?)).into_response())
+}
+
+async fn finder_locations_stream(
+    State(state): State<AppState>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Query(query): Query<FinderLocationsQuery>,
+) -> Result<Response, SiteError> {
+    let peer = connect_info.map(|ConnectInfo(addr)| addr);
+    let inferred_place = state.geoip.lookup_request(&headers, peer);
+    let locations = api_json::<LocationsResponse>(&state, "/locations")
+        .await
+        .map(|locations| locations.locations)
+        .unwrap_or_default();
+    let here = inferred_place.map(|place| place.coordinates);
+    let offset = query.offset.unwrap_or(templates::FINDER_INITIAL_LIMIT);
+    let mut locations = locations;
+    templates::sort_finder_locations(&mut locations, here);
+    let body = Body::from_stream(async_stream::stream! {
+        for (index, location) in locations.into_iter().enumerate().skip(offset) {
+            if let Some(line) = templates::finder_location_stream_line(index, location, here) {
+                yield Ok::<Bytes, Infallible>(Bytes::from(line));
+            }
+        }
+    });
+    let mut headers = typed_headers("application/x-ndjson; charset=utf-8", "private, no-store");
+    headers.insert(
+        header::VARY,
+        HeaderValue::from_static("Accept, User-Agent, X-Forwarded-For"),
+    );
+    Ok((headers, body).into_response())
 }
 
 async fn location_dashboard(
