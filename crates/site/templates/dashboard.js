@@ -25,7 +25,7 @@ let open = parseOpen(app?.dataset.open || "");
 let wait = parseOptionalNumber(app?.dataset.wait || "");
 let observedAt = app?.dataset.observedAt || "";
 let points = parseSeries(trend?.dataset.v || "");
-const comparisonPoints = parseSeries(comparison?.dataset.v || "");
+let comparisonPoints = parseSeries(comparison?.dataset.v || "");
 let day = localDay(observedAt || Date.now());
 let source = null;
 let pollTimer = 0;
@@ -179,6 +179,45 @@ function statusUrl() {
   return "";
 }
 
+function historyUrl() {
+  if (streamUrl.endsWith("/stream")) {
+    return `${streamUrl.slice(0, -"/stream".length)}/history?range=today`;
+  }
+  return "";
+}
+
+function historyPoints(items) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((point) => ({
+      minute: minuteOfDay(point.start),
+      value: Math.round(Number(point.avgPickupWaitMinutes)),
+    }))
+    .filter((point) => Number.isFinite(point.minute) && Number.isFinite(point.value));
+}
+
+function comparisonHistoryPoints(items) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((point) => ({
+      minute: Number(point.minuteOfDay),
+      value: Math.round(Number(point.avgPickupWaitMinutes)),
+    }))
+    .filter((point) => Number.isFinite(point.minute) && Number.isFinite(point.value));
+}
+
+async function loadHistory() {
+  const url = historyUrl();
+  if (!url) return;
+  const response = await fetch(url);
+  if (!response.ok) return;
+  const payload = await response.json();
+  points = historyPoints(payload.points);
+  comparisonPoints = comparisonHistoryPoints(payload.comparisonPoints);
+  if (graph) graph.hidden = open !== true || points.length === 0;
+  draw();
+}
+
 async function pollOnce() {
   const url = statusUrl();
   if (!url) return;
@@ -206,6 +245,7 @@ function startPolling(delay = 0) {
 addEventListener("load", () => {
   draw();
   renderSentence();
+  loadHistory().catch(() => {});
   connect();
   setInterval(renderSentence, 1000);
 });

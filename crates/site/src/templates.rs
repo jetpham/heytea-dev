@@ -14,8 +14,6 @@ use std::fmt::Write as _;
 const DASHBOARD_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/dashboard.css.min"));
 const DASHBOARD_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/dashboard.js.min"));
 const FINDER_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/finder.js.min"));
-const DASHBOARD_FONT_B64: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/dashboard-font.woff2.b64"));
 const FAVICON_SVG: &str = include_str!("../templates/heyteafavi.svg");
 pub(crate) const FINDER_INITIAL_LIMIT: usize = 100;
 
@@ -144,9 +142,7 @@ pub struct DashboardTemplate {
     pub status_line: String,
     pub wait_minutes: i32,
     pub observed_at: String,
-    pub trend_points: String,
     pub trend_data: String,
-    pub comparison_points: String,
     pub comparison_data: String,
     pub trend_minute: i64,
 }
@@ -177,9 +173,7 @@ impl DashboardTemplate {
             status_line: view.status_line,
             wait_minutes: view.wait_minutes,
             observed_at: view.observed_at,
-            trend_points: view.trend_points,
             trend_data: view.trend_data,
-            comparison_points: view.comparison_points,
             comparison_data: view.comparison_data,
             trend_minute: view.trend_minute,
         }
@@ -542,14 +536,14 @@ fn series_data(values: &[(i32, i32)]) -> String {
 }
 
 pub(crate) fn dashboard_css() -> String {
-    format!(
-        "@font-face{{font-family:a;src:url(data:font/woff2;base64,{}) format('woff2');font-display:block}}{}",
-        DASHBOARD_FONT_B64.trim(),
-        DASHBOARD_CSS
-    )
+    system_css()
 }
 
 fn finder_css() -> String {
+    system_css()
+}
+
+fn system_css() -> String {
     DASHBOARD_CSS.replace("font-family:a;", "font-family:system-ui,sans-serif;")
 }
 
@@ -679,7 +673,8 @@ mod tests {
         assert!(html.contains("the wait time at heytea downtown metreon is 8 minutes as of "));
         assert!(html.contains(", which was "));
         assert!(html.contains("data-observed-at="));
-        assert!(html.contains("data:font/woff2;base64,"));
+        assert!(!html.contains(" points=\""));
+        assert!(!html.contains("data:font/woff2;base64,"));
         assert!(html.contains("data:image/svg+xml,"));
         assert!(html.contains("addEventListener(\"load\""));
         assert!(!html.contains("rel=\"stylesheet\""));

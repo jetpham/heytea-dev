@@ -14,8 +14,10 @@ use heytea_core::{
 };
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::json;
-use std::{convert::Infallible, net::SocketAddr, time::Instant};
+use std::{convert::Infallible, net::SocketAddr, time::Duration, time::Instant};
 use tower_http::services::{ServeDir, ServeFile};
+
+const LOCATIONS_CACHE_TTL: Duration = Duration::from_secs(15);
 
 pub fn router(state: AppState) -> Router {
     let asset_root = state.assets.root();
@@ -92,7 +94,10 @@ async fn finder(
     let attribution = inferred_place
         .as_ref()
         .and_then(|_| state.geoip.attribution());
-    let locations = api_json::<LocationsResponse>(&state, "/locations").await;
+    let locations = Some(LocationsResponse {
+        generated_at: Utc::now(),
+        locations: cached_locations(&state).await,
+    });
     let template = templates::FinderTemplate::new(
         locations,
         inferred_place.as_ref(),
@@ -110,10 +115,7 @@ async fn finder_locations_stream(
 ) -> Result<Response, SiteError> {
     let peer = connect_info.map(|ConnectInfo(addr)| addr);
     let inferred_place = state.geoip.lookup_request(&headers, peer);
-    let locations = api_json::<LocationsResponse>(&state, "/locations")
-        .await
-        .map(|locations| locations.locations)
-        .unwrap_or_default();
+    let locations = cached_locations(&state).await;
     let here = inferred_place.map(|place| place.coordinates);
     let offset = query.offset.unwrap_or(templates::FINDER_INITIAL_LIMIT);
     let mut locations = locations;
@@ -149,22 +151,21 @@ async fn location_dashboard(
 
     let evil = evil_request(&headers);
     let location_path = format!("/locations/{}", path.slug);
-    let Some(location) = api_json::<LocationResponse>(&state, &location_path).await else {
+    let status_path = format!("/locations/{}/status", path.slug);
+    let (location, status) = tokio::join!(
+        api_json::<LocationResponse>(&state, &location_path),
+        api_json::<StatusResponse>(&state, &status_path)
+    );
+    let Some(location) = location else {
         return Ok(not_found(headers).await);
     };
-    let status_path = format!("/locations/{}/status", path.slug);
-    let history_path = format!("/locations/{}/history?range=today", path.slug);
-    let (status, history) = tokio::join!(
-        api_json::<StatusResponse>(&state, &status_path),
-        api_json::<HistoryResponse>(&state, &history_path)
-    );
     let stream_url = format!(
         "{}/locations/{}/stream",
         state.public_api_url.trim_end_matches('/'),
         path.slug
     );
     let template =
-        templates::DashboardTemplate::new(status, history, stream_url.clone(), location, evil);
+        templates::DashboardTemplate::new(status, None, stream_url.clone(), location, evil);
     Ok((html_shell_headers(&stream_url), Html(template.render()?)).into_response())
 }
 
@@ -417,6 +418,41 @@ where
     T: DeserializeOwned,
 {
     api_check(state, path).await.value
+}
+
+async fn cached_locations(state: &AppState) -> Vec<LocationResponse> {
+    if let Some(locations) = fresh_cached_locations(state).await {
+        return locations;
+    }
+
+    if let Some(locations) = api_json::<LocationsResponse>(state, "/locations")
+        .await
+        .map(|locations| locations.locations)
+    {
+        *state.locations_cache.write().await = Some(crate::LocationsCache {
+            fetched_at: Instant::now(),
+            locations: locations.clone(),
+        });
+        return locations;
+    }
+
+    state
+        .locations_cache
+        .read()
+        .await
+        .as_ref()
+        .map(|cache| cache.locations.clone())
+        .unwrap_or_default()
+}
+
+async fn fresh_cached_locations(state: &AppState) -> Option<Vec<LocationResponse>> {
+    state
+        .locations_cache
+        .read()
+        .await
+        .as_ref()
+        .filter(|cache| cache.fetched_at.elapsed() < LOCATIONS_CACHE_TTL)
+        .map(|cache| cache.locations.clone())
 }
 
 async fn api_check<T>(state: &AppState, path: &str) -> ApiCheck<T>

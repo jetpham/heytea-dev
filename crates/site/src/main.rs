@@ -6,11 +6,10 @@ mod templates;
 
 use crate::assets::Assets;
 use axum::Router;
-use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
-use tower_http::{
-    compression::{CompressionLayer, CompressionLevel},
-    trace::TraceLayer,
-};
+use heytea_core::LocationResponse;
+use std::{env, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration, time::Instant};
+use tokio::sync::RwLock;
+use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Clone)]
@@ -21,6 +20,13 @@ pub struct AppState {
     pub client: reqwest::Client,
     pub assets: Assets,
     pub(crate) geoip: geoip::GeoIp,
+    pub(crate) locations_cache: Arc<RwLock<Option<LocationsCache>>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct LocationsCache {
+    pub(crate) fetched_at: Instant,
+    pub(crate) locations: Vec<LocationResponse>,
 }
 
 #[tokio::main]
@@ -42,6 +48,7 @@ async fn main() -> anyhow::Result<()> {
             .build()?,
         assets: Assets::load(asset_root()),
         geoip: geoip::GeoIp::from_env()?,
+        locations_cache: Arc::new(RwLock::new(None)),
     };
 
     let app = app(state);
@@ -57,11 +64,7 @@ async fn main() -> anyhow::Result<()> {
 
 pub fn app(state: AppState) -> Router {
     routes::router(state)
-        .layer(
-            CompressionLayer::new()
-                .quality(CompressionLevel::Best)
-                .no_zstd(),
-        )
+        .layer(CompressionLayer::new().no_zstd())
         .layer(TraceLayer::new_for_http())
 }
 

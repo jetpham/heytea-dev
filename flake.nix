@@ -151,8 +151,6 @@
 
           siteBinary = rustBinary {
             package = "heytea-site";
-            extraNativeBuildInputs = [ dashboardFontTools ];
-            extraAttrs.ATKINSON_FONT = "${pkgs.atkinson-hyperlegible}/share/fonts/opentype/AtkinsonHyperlegible-Regular.otf";
           };
 
           site = pkgs.stdenvNoCC.mkDerivation {

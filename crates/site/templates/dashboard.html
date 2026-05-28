@@ -35,8 +35,8 @@
   <main id="app" data-managed="{{ managed }}" data-stream-url="{{ stream_url }}" data-location-name="{{ location_name }}" data-timezone="{{ timezone }}" data-open="{{ open }}" data-wait="{{ wait_minutes }}" data-observed-at="{{ observed_at }}">
     <p id="status" aria-live="polite">{{ status_line }}</p>
     <svg id="graph" viewBox="0 0 100 40" preserveAspectRatio="none" aria-label="pickup wait history with seven-day comparison" role="img"{% if graph_hidden %} hidden{% endif %}>
-      <polyline id="comparison" data-v="{{ comparison_data }}" points="{{ comparison_points }}"></polyline>
-      <polyline id="trend" data-v="{{ trend_data }}" data-m="{{ trend_minute }}" points="{{ trend_points }}"></polyline>
+      <polyline id="comparison" data-v="{{ comparison_data }}"></polyline>
+      <polyline id="trend" data-v="{{ trend_data }}" data-m="{{ trend_minute }}"></polyline>
     </svg>
     <p class="status-note">black is today. gray is the previous seven-day minute average.</p>
   </main>
