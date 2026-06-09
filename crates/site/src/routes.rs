@@ -144,7 +144,7 @@ async fn location_dashboard(
         let location =
             api_json::<LocationResponse>(&state, &format!("/locations/{}", path.slug)).await;
         return match location {
-            Some(location) => Ok((short_cache_headers(30), Json(location)).into_response()),
+            Some(location) => Ok((negotiated_no_store_headers(), Json(location)).into_response()),
             None => Ok(not_found(headers).await),
         };
     }
@@ -166,7 +166,7 @@ async fn location_dashboard(
     );
     let template =
         templates::DashboardTemplate::new(status, None, stream_url.clone(), location, evil);
-    Ok((html_shell_headers(&stream_url), Html(template.render()?)).into_response())
+    Ok((location_html_headers(&stream_url), Html(template.render()?)).into_response())
 }
 
 async fn about(headers: HeaderMap) -> Result<Response, SiteError> {
@@ -706,6 +706,12 @@ fn method_not_allowed() -> (StatusCode, HeaderMap, &'static str) {
     )
 }
 
+fn location_html_headers(stream_url: &str) -> HeaderMap {
+    let mut headers = html_shell_headers_with_cache(stream_url, "private, no-store");
+    headers.insert(header::VARY, HeaderValue::from_static("Accept"));
+    headers
+}
+
 fn html_shell_headers(stream_url: &str) -> HeaderMap {
     html_shell_headers_with_cache(stream_url, "public, max-age=30, must-revalidate")
 }
@@ -759,6 +765,12 @@ fn negotiated_headers(cache_control: &str) -> HeaderMap {
     headers
 }
 
+fn negotiated_no_store_headers() -> HeaderMap {
+    let mut headers = no_store_headers();
+    headers.insert(header::VARY, HeaderValue::from_static("Accept"));
+    headers
+}
+
 fn no_store_headers() -> HeaderMap {
     cache_headers("no-store")
 }
@@ -775,6 +787,13 @@ fn cache_headers(cache_control: &str) -> HeaderMap {
         header::CACHE_CONTROL,
         HeaderValue::from_str(cache_control).expect("valid cache control"),
     );
+    if cache_control.contains("no-store") {
+        headers.insert("cdn-cache-control", HeaderValue::from_static("no-store"));
+        headers.insert(
+            "cloudflare-cdn-cache-control",
+            HeaderValue::from_static("no-store"),
+        );
+    }
     headers
 }
 
@@ -941,5 +960,34 @@ mod tests {
         assert!(htcpcp_method(&Method::from_bytes(b"BREW").unwrap()));
         assert!(htcpcp_method(&Method::from_bytes(b"WHEN").unwrap()));
         assert!(!htcpcp_method(&Method::GET));
+    }
+
+    #[test]
+    fn location_html_headers_are_not_edge_cached() {
+        let headers = location_html_headers("https://api.heytea.dev/locations/demo/stream");
+
+        assert_eq!(
+            headers.get(header::CACHE_CONTROL).unwrap(),
+            "private, no-store"
+        );
+        assert_eq!(headers.get(header::VARY).unwrap(), "Accept");
+        assert_eq!(headers.get("cdn-cache-control").unwrap(), "no-store");
+        assert_eq!(
+            headers.get("cloudflare-cdn-cache-control").unwrap(),
+            "no-store"
+        );
+    }
+
+    #[test]
+    fn negotiated_no_store_headers_vary_on_accept() {
+        let headers = negotiated_no_store_headers();
+
+        assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+        assert_eq!(headers.get(header::VARY).unwrap(), "Accept");
+        assert_eq!(headers.get("cdn-cache-control").unwrap(), "no-store");
+        assert_eq!(
+            headers.get("cloudflare-cdn-cache-control").unwrap(),
+            "no-store"
+        );
     }
 }

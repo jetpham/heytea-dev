@@ -520,7 +520,7 @@ fn svg_points(values: &[(i32, i32)], max_value: i32) -> String {
         .map(|(minute, value)| {
             let minute = (*minute).clamp(0, 1439) as f64;
             let x = minute * 100.0 / 1439.0;
-            let y = 38.0 - *value as f64 / max_value.max(1) as f64 * 30.0;
+            let y = 36.0 - *value as f64 / max_value.max(1) as f64 * 28.0;
             format!("{x:.1},{y:.1}")
         })
         .collect::<Vec<_>>()
@@ -712,6 +712,53 @@ mod tests {
         assert!(!html.contains("id=\"tracking-request\""));
         assert!(!html.contains("jet@extremist.software"));
         assert!(!html.contains("mailto:jet"));
+    }
+
+    #[test]
+    fn dashboard_keeps_zero_minute_history_points_visible() {
+        let now = Utc::now();
+        let status = StatusResponse {
+            name: "Downtown Metreon".to_string(),
+            address: "165 4th St, San Francisco, CA 94103".to_string(),
+            is_open: Some(true),
+            pickup_wait_minutes: Some(0),
+            delivery_estimate_minutes: Some(27),
+            making_cups: Some(0),
+            making_orders: Some(0),
+            is_estimate: Some(true),
+            text: None,
+            notices: Vec::new(),
+            closing_notices: Vec::new(),
+            observed_at: now,
+            stale: false,
+            stale_after: now,
+        };
+        let history = HistoryResponse {
+            range: "today".to_string(),
+            generated_at: now,
+            points: (0..3)
+                .map(|index| HistoryPoint {
+                    start: now + chrono::TimeDelta::minutes(index),
+                    end: now + chrono::TimeDelta::minutes(index + 1),
+                    avg_pickup_wait_minutes: Some(0.0),
+                    min_pickup_wait_minutes: Some(0),
+                    max_pickup_wait_minutes: Some(0),
+                    avg_delivery_estimate_minutes: Some(27.0),
+                    avg_making_cups: Some(0.0),
+                    avg_making_orders: Some(0.0),
+                    sample_count: 1,
+                })
+                .collect(),
+            comparison_points: Vec::new(),
+        };
+        let location = test_location("downtown-metreon", "Downtown Metreon", 37.784, -122.403, 0);
+        let view = DashboardView::new(Some(&status), Some(&history), &location);
+
+        assert_eq!(view.trend_data.matches(":0").count(), 3);
+        assert!(!view.trend_points.is_empty());
+        assert!(view.trend_points.contains(",36.0"));
+        assert!(!view.graph_hidden);
+        assert!(view.open);
     }
 
     #[test]

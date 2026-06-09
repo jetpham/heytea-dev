@@ -111,7 +111,7 @@ function drawSeries(el, series, axis) {
   const path = series
     .map((point) => {
       const x = Math.max(0, Math.min(1439, point.minute)) * 100 / 1439;
-      const y = 38 - point.value / axis * 30;
+      const y = 36 - point.value / axis * 28;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(" ");
