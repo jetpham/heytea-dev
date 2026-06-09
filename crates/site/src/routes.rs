@@ -140,15 +140,6 @@ async fn location_dashboard(
     Path(path): Path<LocationPath>,
     headers: HeaderMap,
 ) -> Result<Response, SiteError> {
-    if wants_json(&headers) {
-        let location =
-            api_json::<LocationResponse>(&state, &format!("/locations/{}", path.slug)).await;
-        return match location {
-            Some(location) => Ok((negotiated_no_store_headers(), Json(location)).into_response()),
-            None => Ok(not_found(headers).await),
-        };
-    }
-
     let evil = evil_request(&headers);
     let location_path = format!("/locations/{}", path.slug);
     let status_path = format!("/locations/{}/status", path.slug);
@@ -571,14 +562,6 @@ fn escape_xml(value: &str) -> String {
 }
 
 async fn not_found(headers: HeaderMap) -> Response {
-    if wants_json(&headers) {
-        return (
-            StatusCode::NOT_FOUND,
-            no_store_headers(),
-            Json(json!({ "error": { "code": "NOT_FOUND", "message": "not found" } })),
-        )
-            .into_response();
-    }
     if wants_markdown(&headers) || wants_text(&headers) || agent_user_agent(&headers) {
         return (
             StatusCode::NOT_FOUND,
@@ -707,9 +690,7 @@ fn method_not_allowed() -> (StatusCode, HeaderMap, &'static str) {
 }
 
 fn location_html_headers(stream_url: &str) -> HeaderMap {
-    let mut headers = html_shell_headers_with_cache(stream_url, "private, no-store");
-    headers.insert(header::VARY, HeaderValue::from_static("Accept"));
-    headers
+    html_shell_headers_with_cache(stream_url, "private, no-store")
 }
 
 fn html_shell_headers(stream_url: &str) -> HeaderMap {
@@ -762,12 +743,6 @@ fn short_cache_headers(seconds: u64) -> HeaderMap {
 fn negotiated_headers(cache_control: &str) -> HeaderMap {
     let mut headers = cache_headers(cache_control);
     headers.insert(header::VARY, HeaderValue::from_static("Accept, User-Agent"));
-    headers
-}
-
-fn negotiated_no_store_headers() -> HeaderMap {
-    let mut headers = no_store_headers();
-    headers.insert(header::VARY, HeaderValue::from_static("Accept"));
     headers
 }
 
@@ -970,7 +945,7 @@ mod tests {
             headers.get(header::CACHE_CONTROL).unwrap(),
             "private, no-store"
         );
-        assert_eq!(headers.get(header::VARY).unwrap(), "Accept");
+        assert!(headers.get(header::VARY).is_none());
         assert_eq!(headers.get("cdn-cache-control").unwrap(), "no-store");
         assert_eq!(
             headers.get("cloudflare-cdn-cache-control").unwrap(),
@@ -978,16 +953,17 @@ mod tests {
         );
     }
 
-    #[test]
-    fn negotiated_no_store_headers_vary_on_accept() {
-        let headers = negotiated_no_store_headers();
+    #[tokio::test]
+    async fn site_not_found_is_single_representation_for_json_accept() {
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
 
-        assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
-        assert_eq!(headers.get(header::VARY).unwrap(), "Accept");
-        assert_eq!(headers.get("cdn-cache-control").unwrap(), "no-store");
+        let response = not_found(request_headers).await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(
-            headers.get("cloudflare-cdn-cache-control").unwrap(),
-            "no-store"
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/html; charset=utf-8"
         );
     }
 }
